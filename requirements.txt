@@ -1,0 +1,32 @@
+# Core pipeline
+pysubs2
+numpy<2
+soundfile
+pyrubberband
+librosa
+scikit-learn
+
+# Synthesis
+torch
+torchaudio
+kokoro
+misaki[en]
+chatterbox-tts
+
+# Analysis
+speechbrain
+demucs
+
+# Voice conversion (OpenVoice converter, vendored by scripts/setup.sh)
+wavmark
+inflect
+unidecode
+eng_to_ipa
+pypinyin
+jieba
+cn2an
+huggingface_hub
+
+# chatterbox-tts pulls resemble-perth, which imports pkg_resources.
+# setuptools removed pkg_resources in 81.
+setuptools<81

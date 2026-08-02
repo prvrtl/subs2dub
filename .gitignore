@@ -1,0 +1,40 @@
+# Environments
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Model weights, fetched by scripts/setup.sh
+checkpoints_ov/
+vendor/
+
+# Third-party source fetched at setup time
+OpenVoice/
+
+# Working directory: stems, caches, references, synthesized audio.
+# Everything here is derived from copyrighted source material.
+work/
+*.srt
+*.ass
+*.vtt
+
+# Media. Never commit source films, clips, previews or rendered dubs.
+*.mkv
+*.mp4
+*.avi
+*.mov
+*.webm
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.aac
+*.ogg
+
+# Reports contain dialogue text from the source subtitles
+cast.tsv
+overruns.tsv
+*.log
+
+# macOS
+.DS_Store
