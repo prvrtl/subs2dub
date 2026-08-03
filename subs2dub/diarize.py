@@ -279,6 +279,67 @@ def cluster_speakers(
     return np.array([remap[v] for v in labels], dtype=int)
 
 
+def cue_f0(cues: list[Cue], wav: Path) -> np.ndarray:
+    """Median pitch for every cue, NaN where none could be measured."""
+    import librosa
+    import soundfile as sf
+
+    audio, sr = sf.read(wav, dtype="float32")
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+
+    out = np.full(len(cues), np.nan, dtype=float)
+    for i, c in enumerate(cues):
+        seg = audio[int(c.start * sr):int(min(c.end, c.start + 4.0) * sr)]
+        if seg.size < 0.4 * sr or float(np.abs(seg).max() or 0) < 5e-3:
+            continue
+        try:
+            f0, voiced, _ = librosa.pyin(
+                seg, fmin=60, fmax=400, sr=sr, frame_length=1024
+            )
+            f0 = f0[np.isfinite(f0) & voiced] if voiced is not None else f0
+            f0 = f0[np.isfinite(f0)]
+            if f0.size >= 8:
+                out[i] = float(np.median(f0))
+        except Exception:
+            continue
+    return out
+
+
+def split_by_pitch(
+    labels: np.ndarray, f0: np.ndarray, low: float = 140.0, high: float = 178.0,
+    min_side: int = 2,
+) -> np.ndarray:
+    """Separate a cluster that holds both a man and a woman.
+
+    Embeddings occasionally merge two voices, and when those voices differ in
+    gender it is the worst error available: half the lines are delivered in the
+    wrong register. Pitch is measured independently and settles that particular
+    question reliably.
+
+    Deliberately narrow. Only clusters with members well clear of the boundary
+    on both sides are split, because within one register pitch says little that
+    the embeddings do not say better - one person ranges widely across a scene,
+    and two people of the same gender can sit almost on top of each other.
+    """
+    labels = labels.copy()
+    for lab in sorted(set(labels.tolist())):
+        idx = np.flatnonzero((labels == lab) & np.isfinite(f0))
+        if idx.size < min_side * 2:
+            continue
+        below = idx[f0[idx] < low]
+        above = idx[f0[idx] > high]
+        if below.size < min_side or above.size < min_side:
+            continue
+        if below.size + above.size < idx.size * 0.7:
+            continue
+        boundary = (low + high) / 2.0
+        moving = idx[f0[idx] > boundary]
+        if moving.size and moving.size < idx.size:
+            labels[moving] = max(labels) + 1
+    return labels
+
+
 def median_f0(
     cues: list[Cue], wav: Path, labels: np.ndarray, per_speaker: int = 15
 ) -> dict[int, float]:
@@ -341,6 +402,8 @@ def diarize(
     labels = cluster_speakers(
         embs, valid, n_speakers, max_speakers, merge_sim, min_lines
     )
+    if not n_speakers:
+        labels = split_by_pitch(labels, cue_f0(cues, wav))
     for c, lab in zip(cues, labels):
         c.speaker = f"S{int(lab):02d}"
     return {int(k): v for k, v in median_f0(cues, wav, labels).items()}
