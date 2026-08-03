@@ -80,7 +80,12 @@ def cmd_build(args: argparse.Namespace) -> int:
     with Awake(not getattr(args, "no_caffeinate", False)) as awake:
         if awake.active:
             print("holding off sleep for the duration of this run")
-        return _build(args)
+        try:
+            return _build(args)
+        except KeyboardInterrupt:
+            print("\nstopped. Re-run the same command to carry on; finished "
+                  "lines are cached.")
+            return 130
 
 
 def work_dir_for(source: str, requested: str) -> Path:
@@ -527,7 +532,11 @@ def main(argv: list[str] | None = None) -> int:
 def wizard_run() -> int:
     from .wizard import run
 
-    return run()
+    try:
+        return run()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return 130
 
 
 if __name__ == "__main__":
