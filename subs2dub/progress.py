@@ -54,7 +54,7 @@ class Reporter:
 
     title: str
     total: int
-    keep: int = 6
+    keep: int = 4
     recent: list[Line] = field(default_factory=list)
     done: int = 0
 
@@ -80,7 +80,8 @@ class Reporter:
         if self.rich:
             self.live = Live(
                 self._render(), console=self.console,
-                refresh_per_second=8, transient=False,
+                refresh_per_second=6, transient=False,
+                vertical_overflow="crop",
             )
             self.live.__enter__()
         return self
@@ -117,29 +118,36 @@ class Reporter:
             self.live.update(self._render())
 
     def _render(self):
-        table = Table.grid(padding=(0, 1))
-        table.add_column(justify="right", style="dim", no_wrap=True)
-        table.add_column(no_wrap=True)
-        table.add_column(style="dim", no_wrap=True)
-        table.add_column(overflow="ellipsis")
+        # Every row has to fit on one terminal line. A row that wraps makes the
+        # panel taller than the frame Live is repainting, and the leftovers end
+        # up strewn across the scrollback.
+        fixed = len("000.0s") + 4 + 11 + 8  # time, speaker, outcome, padding
+        room = max(20, self.console.width - fixed)
 
-        for line in self.recent:
+        table = Table.grid(padding=(0, 1))
+        table.add_column(justify="right", style="dim", no_wrap=True, width=6)
+        table.add_column(no_wrap=True, width=4)
+        table.add_column(style="dim", no_wrap=True, width=11)
+        table.add_column(no_wrap=True, width=room)
+
+        def row(line: Line, active: bool):
             label, colour = MARKS.get(line.outcome, ("", "dim"))
+            text = line.text.replace("\n", " ")
+            if len(text) > room:
+                text = text[:room - 1] + "…"
             table.add_row(
                 f"{line.start:.1f}s",
-                Text(line.speaker or "-", style="magenta"),
-                Text(label, style=colour),
-                Text(line.text[:70], style="dim"),
+                Text(line.speaker or "-",
+                     style="bold magenta" if active else "magenta"),
+                Text("..." if active else label, style="cyan" if active else colour),
+                Text(text, style="" if active else "dim"),
             )
 
+        for line in self.recent:
+            row(line, False)
         current = getattr(self, "current", None)
         if current is not None:
-            table.add_row(
-                f"{current.start:.1f}s",
-                Text(current.speaker or "-", style="bold magenta"),
-                Text("...", style="cyan"),
-                Text(current.text[:70]),
-            )
+            row(current, True)
 
         return Panel(
             Group(table, self.bar),
