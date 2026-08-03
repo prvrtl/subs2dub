@@ -28,6 +28,7 @@ class Cue:
     stretch: float = 1.0
     borrowed: float = 0.0
     overrun: float = 0.0
+    source_speech: float = 0.0
     overlapped: float = 0.0
     truncated: float = 0.0
 

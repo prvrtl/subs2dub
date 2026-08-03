@@ -46,8 +46,8 @@ class FitConfig:
     overrun_tolerance: float = 0.15
     max_overlap_other: float = 0.45
     duck_overlap_db: float = -3.5
-    min_fill: float = 0.88
-    max_slowdown: float = 0.78
+    min_fill: float = 0.85
+    max_slowdown: float = 0.94
     attempts: int = 3
 
 
@@ -151,14 +151,16 @@ def _fill(
     audio: np.ndarray, sr: int, cue: Cue, text: str,
     cfg: FitConfig, report: FitReport,
 ) -> np.ndarray:
-    """Lengthen a clip that leaves most of its window silent.
+    """Lengthen a clip that is much shorter than the line it replaces.
 
-    A translation shorter than the line it replaces is normal, but the gap has
-    to go somewhere. Spread across the delivery it sounds like an unhurried
-    reading; left at the end it sounds like the character stopped mid-scene.
+    The target is how long the original actor spoke, not how long the subtitle
+    is on screen - those differ by seconds, and chasing the window drags the
+    delivery out until it no longer matches the picture. Where the original
+    left a pause, the dub leaves one too.
     """
     dur = audio.size / sr
-    target = cue.window * cfg.min_fill
+    reference = cue.source_speech if cue.source_speech > 0.3 else cue.window
+    target = min(reference, cue.window) * cfg.min_fill
     if dur <= 0 or dur >= target:
         return audio
 

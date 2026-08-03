@@ -64,6 +64,23 @@ def _terminal_slope(seg: np.ndarray, sr: int) -> float:
     return float(slope)
 
 
+def _speech_seconds(seg: np.ndarray, sr: int, frame: float = 0.02) -> float:
+    """How long the original actor actually speaks inside a cue.
+
+    A cue window is where a subtitle is shown, not how long the line takes to
+    say. Targeting the window makes the dub drag; targeting this keeps the
+    original tempo and leaves the same pauses.
+    """
+    n = int(frame * sr)
+    if seg.size < n:
+        return 0.0
+    frames = np.abs(seg[: seg.size // n * n].reshape(-1, n)).mean(axis=1)
+    peak = float(frames.max()) if frames.size else 0.0
+    if peak <= 0:
+        return 0.0
+    return float((frames > max(0.004, peak * 0.06)).sum()) * frame
+
+
 def analyze(cues: list[Cue], vocals_wav, progress=None) -> None:
     """Measure intensity and terminal pitch for every cue, in place."""
     import soundfile as sf
@@ -75,6 +92,7 @@ def analyze(cues: list[Cue], vocals_wav, progress=None) -> None:
     rms = np.full(len(cues), np.nan, dtype=np.float64)
     for i, c in enumerate(cues):
         seg = audio[int(c.start * sr):int(c.end * sr)]
+        c.source_speech = _speech_seconds(seg, sr)
         if seg.size < 0.15 * sr:
             continue
         r = float(np.sqrt(np.mean(seg.astype(np.float64) ** 2)))

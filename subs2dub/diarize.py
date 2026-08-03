@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 
 from .model import Cue
+from .provenance import reuse
 
 EMBED_SR = 16_000
 _MIN_SEG = 0.45
@@ -166,15 +167,20 @@ def _centroids(X: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.ndarra
 
 
 def _merge_close(
-    X: np.ndarray, labels: np.ndarray, sim: float, min_size: int
+    X: np.ndarray, labels: np.ndarray, sim: float, min_size: int,
+    target: int = 0,
 ) -> np.ndarray:
     """Collapse clusters that are the same voice.
 
-    Silhouette-style scores reward splitting, so the initial clustering
-    over-segments. Speaker verification gives a principled way back: two
-    clusters whose centroids are more similar than `sim` are one person.
-    Tiny clusters are then absorbed - a character with one line is far more
-    likely to be a misassignment than a real role.
+    The initial clustering deliberately over-segments, because splitting one
+    character in two is recoverable and lumping two together is not. Merging
+    back stops at whichever comes first: the count the separation scores
+    actually support, or a pair of centroids too dissimilar to be one person.
+
+    An absolute similarity threshold alone is not enough. How close two
+    recordings of the same voice sit depends on the material - short noisy cues
+    from a conversation sit far lower than long clean ones - so a fixed
+    threshold either splits everyone or merges everyone.
     """
     labels = labels.copy()
     while len(np.unique(labels)) > 1:
@@ -182,7 +188,7 @@ def _merge_close(
         S = cents @ cents.T
         np.fill_diagonal(S, -1.0)
         i, j = np.unravel_index(np.argmax(S), S.shape)
-        if S[i, j] < sim:
+        if S[i, j] < sim and len(ids) <= max(target, 1):
             break
         labels[labels == ids[j]] = ids[i]
 
@@ -250,8 +256,8 @@ def cluster_speakers(
         if n_speakers:
             k = max(1, min(n_speakers, len(X)))
         else:
-            k = max(_auto_k(X, max_speakers), min(max_speakers, len(X) // 4))
-            k = max(2, min(k, len(X) - 1))
+            target = _auto_k(X, max_speakers)
+            k = max(2, min(target + 2, max_speakers, len(X) - 1))
         lab = (
             np.zeros(len(X), dtype=int)
             if k <= 1
@@ -261,7 +267,7 @@ def cluster_speakers(
         )
         lab = _refine(X, lab)
         if not n_speakers:
-            lab = _merge_close(X, lab, merge_sim, min_lines)
+            lab = _merge_close(X, lab, merge_sim, min_lines, target)
             lab = _refine(X, lab)
         labels[idx] = lab
 
@@ -325,12 +331,11 @@ def diarize(
     """
     if vocals is not None:
         wav = vocals.with_name("vocals16k.wav")
-        if not _current(wav, vocals):
-            to_mono16k(vocals, wav)
+        reuse(work, wav, lambda: to_mono16k(vocals, wav), source=vocals)
     else:
         wav = work / f"{video.stem}-{audio_stream}-16k.wav"
-        if not _current(wav, video):
-            extract_audio(video, wav, audio_stream)
+        reuse(work, wav, lambda: extract_audio(video, wav, audio_stream),
+              source=video, stream=audio_stream)
 
     embs, valid = embed_cues(cues, wav, work / "models", progress=progress)
     labels = cluster_speakers(

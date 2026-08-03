@@ -140,8 +140,11 @@ def _build(args: argparse.Namespace) -> int:
     )
     print(f"subtitles: {srt}")
 
-    cues = cuemod.load(srt, merge_gap=args.merge_gap)
+    track: list = []
+    cues = cuemod.load(srt, info=track)
     all_cues = cues
+    if track:
+        print(track[0].describe())
     print(f"parsed {len(cues)} speakable cues")
 
     source = video
@@ -279,11 +282,11 @@ def _build(args: argparse.Namespace) -> int:
 
     if not args.no_prosody and vocals is not None:
         from . import prosody
-        from .diarize import _current, to_mono16k
+        from .diarize import to_mono16k
+        from .provenance import reuse
 
         vw = vocals.with_name("vocals16k.wav")
-        if not _current(vw, vocals):
-            to_mono16k(vocals, vw)
+        reuse(work, vw, lambda: to_mono16k(vocals, vw), source=vocals)
 
         def pprog(done: int, n: int) -> None:
             print(f"  analyzing delivery {done}/{n}", end="\r", flush=True)

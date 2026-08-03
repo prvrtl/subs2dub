@@ -18,9 +18,26 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .provenance import Provenance
+
 _URL = re.compile(r"^https?://", re.I)
 
 _OPEN = {"creativeCommons", "cc-by"}
+
+
+def _existing(work: Path):
+    """The download already in this directory, if there is one."""
+    video = next(iter(sorted(work.glob("source.mkv"))), None) or next(
+        (p for p in sorted(work.glob("source.*"))
+         if p.suffix not in (".srt", ".fetched")), None
+    )
+    subs = next(iter(sorted(work.glob("source*.srt"))), None)
+    return (video, subs) if video is not None else None
+
+
+def is_auto_hint(info: dict, sub_lang: str) -> bool:
+    manual = set((info.get("subtitles") or {}).keys())
+    return not any(c.split("-")[0] == sub_lang for c in manual)
 
 
 def _worth_ranging(section: tuple[float, float], duration: float) -> bool:
@@ -89,6 +106,24 @@ def fetch(
     """
     work.mkdir(parents=True, exist_ok=True)
     info = probe(url)
+
+    prov = Provenance(work)
+    marker = work / "source.fetched"
+    stamp = dict(url=url, lang=sub_lang, height=max_height,
+                 section=f"{section}" if section else "whole")
+    if prov.fresh(marker, **stamp):
+        found = _existing(work)
+        if found is not None:
+            video, subs = found
+            print("  already downloaded")
+            return Source(
+                video=video, subs=subs,
+                trimmed=marker.read_text().strip() == "trimmed",
+                title=info.get("title", ""),
+                license=info.get("license", "") or "",
+                auto_captions=is_auto_hint(info, sub_lang),
+                languages=sorted((info.get("subtitles") or {}).keys()),
+            )
 
     for old in list(work.glob("source.*")) + list(work.glob("source*.srt")):
         old.unlink(missing_ok=True)
@@ -162,6 +197,9 @@ def fetch(
     subs = next(iter(sorted(work.glob("source*.srt"))), None)
     if video is None:
         raise SystemExit("download produced no video file")
+
+    marker.write_text("trimmed" if trimmed else "whole")
+    prov.record(marker, **stamp)
 
     return Source(
         video=video, subs=subs, trimmed=trimmed,

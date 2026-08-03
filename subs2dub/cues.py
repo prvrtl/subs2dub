@@ -13,8 +13,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pysubs2
-
+from . import captions
 from .model import Cue
 
 _BRACKETED = re.compile(r"^\s*[\[(][^\])]*[\])]\s*$")
@@ -60,18 +59,21 @@ def _split_speakers(lines: list[str]) -> list[str]:
 def load(
     path: str | Path,
     *,
-    merge_gap: float = 0.30,
-    max_merge_window: float = 12.0,
+    merge_gap: float | None = None,
+    max_merge_window: float | None = None,
+    info: list | None = None,
 ) -> list[Cue]:
     """Parse a subtitle file into cleaned, merged Cues (times in seconds)."""
-    subs = pysubs2.load(str(path))
-    raw: list[Cue] = []
+    events, track = captions.normalize(captions.read(path))
+    if info is not None:
+        info.append(track)
+    gap, span = captions.merge_policy(track)
+    merge_gap = gap if merge_gap is None else merge_gap
+    max_merge_window = span if max_merge_window is None else max_merge_window
 
-    for ev in subs:
-        if ev.is_comment or ev.type != "Dialogue":
-            continue
-        text = ev.plaintext or ""
-        lines = [_clean_line(ln) for ln in text.split("\n")]
+    raw: list[Cue] = []
+    for ev in events:
+        lines = [_clean_line(ln) for ln in ev.text.split("\n")]
         lines = [ln for ln in lines if ln]
         if not lines:
             continue
@@ -81,9 +83,7 @@ def load(
         if not parts:
             continue
 
-        start, end = ev.start / 1000.0, ev.end / 1000.0
-        if end <= start:
-            continue
+        start, end = ev.start, ev.end
 
         if len(parts) == 1:
             raw.append(Cue(idx=len(raw), start=start, end=end, text=parts[0]))
