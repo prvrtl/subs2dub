@@ -86,6 +86,12 @@ def fetch(
     work.mkdir(parents=True, exist_ok=True)
     info = probe(url)
 
+    # Whatever a previous run left here is not this video. The download is found
+    # afterwards by globbing, so a stale source.mkv or source.en.srt would be
+    # picked up instead and the wrong film would be dubbed.
+    for old in list(work.glob("source.*")) + list(work.glob("source*.srt")):
+        old.unlink(missing_ok=True)
+
     manual = set((info.get("subtitles") or {}).keys())
     auto = set((info.get("automatic_captions") or {}).keys())
 

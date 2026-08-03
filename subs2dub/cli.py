@@ -15,6 +15,8 @@ want several gigabytes.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import re
 import subprocess
 import sys
 import time
@@ -83,9 +85,26 @@ def cmd_build(args: argparse.Namespace) -> int:
         return _build(args)
 
 
+def work_dir_for(source: str, requested: str) -> Path:
+    """Give each source its own working directory.
+
+    Everything cached in here - the download, the stems, the glossary, the
+    synthesized clips - belongs to one video. Sharing a directory between two
+    videos means the second run can pick up the first one's files.
+    """
+    base = Path(requested).expanduser()
+    if base.name != "work" or base.parent != Path("."):
+        return base  # an explicit path is the caller's business
+    name = Path(source).stem if not srcmod.is_url(source) else source
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", name).strip("-").lower()[:40]
+    digest = hashlib.sha1(source.encode()).hexdigest()[:8]
+    return base / f"{slug or 'video'}-{digest}"
+
+
 def _build(args: argparse.Namespace) -> int:
-    work = Path(args.work).expanduser()
+    work = work_dir_for(args.video, args.work)
     work.mkdir(parents=True, exist_ok=True)
+    print(f"working directory: {work}")
 
     clip_range = None
     if args.clip:

@@ -334,6 +334,16 @@ CHARS_PER_SEC = 12.6
 RUNAWAY = 2.5
 
 
+def _pump(stream, replies) -> None:
+    """Move worker output into a queue so reads can time out."""
+    try:
+        for line in stream:
+            replies.put(line)
+    except (ValueError, OSError):
+        pass
+    replies.put(None)
+
+
 class WorkerError(RuntimeError):
     """A synthesis worker failed on one line and may need restarting."""
 
@@ -428,6 +438,7 @@ class FishSpeechTTS:
         self.compile = compile
         self._proc = None
         self._log = None
+        self._reader = None
         if cache_dir:
             cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -474,14 +485,45 @@ class FishSpeechTTS:
             )
         return self._proc
 
-    def _read_reply(self) -> dict:
+    def _read_reply(self, timeout: float = 900.0) -> dict:
+        """Read one reply, giving up rather than waiting on a dead worker.
+
+        A plain readline() here can block forever. If the worker dies after
+        spawning something that inherited its stdout - a model download, say -
+        the pipe never reaches EOF, and the run stops with no explanation and
+        no way back.
+        """
         import json
+        import queue
+        import threading
+        import time
 
         assert self._proc is not None
+        if getattr(self, "_reader", None) is None:
+            self._replies: queue.Queue = queue.Queue()
+            self._reader = threading.Thread(
+                target=_pump, args=(self._proc.stdout, self._replies),
+                daemon=True,
+            )
+            self._reader.start()
+
+        deadline = time.time() + timeout
         while True:
-            line = self._proc.stdout.readline()
-            if not line:
-                return {"ok": False, "err": "worker exited; see the log"}
+            left = deadline - time.time()
+            if left <= 0:
+                return {"ok": False, "err": f"worker silent for {timeout:.0f}s"}
+            try:
+                line = self._replies.get(timeout=min(2.0, left))
+            except queue.Empty:
+                if self._proc.poll() is not None:
+                    return {
+                        "ok": False,
+                        "err": f"worker exited ({self._proc.returncode}); see "
+                               f"{getattr(self._log, 'name', 'the worker log')}",
+                    }
+                continue
+            if line is None:  # the pipe closed
+                return {"ok": False, "err": "worker closed its output"}
             line = line.strip()
             if not line:
                 continue
@@ -594,6 +636,7 @@ class FishSpeechTTS:
             except Exception:
                 self._proc.kill()
             self._proc = None
+            self._reader = None
 
 
 class _WorkerBackend:
@@ -619,6 +662,7 @@ class _WorkerBackend:
         self.device = device
         self._proc = None
         self._log = None
+        self._reader = None
         if cache_dir:
             cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -657,14 +701,45 @@ class _WorkerBackend:
             )
         return self._proc
 
-    def _read_reply(self) -> dict:
+    def _read_reply(self, timeout: float = 900.0) -> dict:
+        """Read one reply, giving up rather than waiting on a dead worker.
+
+        A plain readline() here can block forever. If the worker dies after
+        spawning something that inherited its stdout - a model download, say -
+        the pipe never reaches EOF, and the run stops with no explanation and
+        no way back.
+        """
         import json
+        import queue
+        import threading
+        import time
 
         assert self._proc is not None
+        if getattr(self, "_reader", None) is None:
+            self._replies: queue.Queue = queue.Queue()
+            self._reader = threading.Thread(
+                target=_pump, args=(self._proc.stdout, self._replies),
+                daemon=True,
+            )
+            self._reader.start()
+
+        deadline = time.time() + timeout
         while True:
-            line = self._proc.stdout.readline()
-            if not line:
-                return {"ok": False, "err": "worker exited; see the log"}
+            left = deadline - time.time()
+            if left <= 0:
+                return {"ok": False, "err": f"worker silent for {timeout:.0f}s"}
+            try:
+                line = self._replies.get(timeout=min(2.0, left))
+            except queue.Empty:
+                if self._proc.poll() is not None:
+                    return {
+                        "ok": False,
+                        "err": f"worker exited ({self._proc.returncode}); see "
+                               f"{getattr(self._log, 'name', 'the worker log')}",
+                    }
+                continue
+            if line is None:  # the pipe closed
+                return {"ok": False, "err": "worker closed its output"}
             line = line.strip()
             if not line:
                 continue
@@ -712,6 +787,7 @@ class _WorkerBackend:
         except Exception:
             self._proc.kill()
         self._proc = None
+        self._reader = None
 
 
 class StyleTTS2(_WorkerBackend):
