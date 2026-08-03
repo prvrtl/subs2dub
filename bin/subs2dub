@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Run subs2dub without needing to know where its virtualenv lives.
+#
+#   subs2dub                     interactive
+#   subs2dub movie.mkv           dub a file
+#   subs2dub build ... --flags   the full command line
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+python="$here/.venv/bin/python"
+
+if [ ! -x "$python" ]; then
+  echo "subs2dub is not set up yet. Run:"
+  echo "  $here/scripts/setup.sh"
+  exit 1
+fi
+
+# A bare path or URL is the common case, so treat it as `build <that>` rather
+# than making people remember the subcommand.
+if [ $# -gt 0 ]; then
+  case "$1" in
+    build|wizard|-h|--help) ;;
+    *) set -- build "$@" ;;
+  esac
+fi
+
+exec "$python" -m subs2dub "$@"

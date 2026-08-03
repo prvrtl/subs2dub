@@ -44,8 +44,22 @@ BACKENDS = [
            "noticeably more synthetic than the others"),
 ]
 
-# Backends that only ever speak English, so a non-English target has to move.
-ENGLISH_ONLY = {"kokoro", "chatterbox"}
+# What each engine can actually speak. None means "many languages".
+BACKEND_LANGS = {
+    "styletts2": {"uk"},
+    "fish": {"uk"},
+    "kokoro": {"en"},
+    "chatterbox": {"en"},
+    "piper": None,
+}
+
+
+def backends_for(lang: str) -> list[Choice]:
+    """Only offer engines that can speak the target language."""
+    return [
+        c for c in BACKENDS
+        if BACKEND_LANGS.get(c.value) is None or lang in BACKEND_LANGS[c.value]
+    ]
 
 LANGUAGES = [
     Choice("en", "English", "No translation needed when subtitles are English."),
@@ -195,33 +209,37 @@ def run(argv: list[str] | None = None) -> int:
             )
         translator = _menu(console, "How should it translate?", options)
 
-    english = target_lang in ("en", "")
-    backend = _menu(
-        console, "Voice engine", BACKENDS, default=3 if english else 1
-    )
-    if not english and backend in ENGLISH_ONLY:
+    usable = backends_for(target_lang)
+    if len(usable) == 1:
+        backend = usable[0].value
         console.print(
-            f"[yellow]  {backend} only speaks English. Using Piper for "
-            f"{target_lang} instead.[/yellow]"
+            f"\n[bold]Voice engine[/bold]\n  [dim]{usable[0].title} - "
+            f"the only one that speaks {target_lang}[/dim]"
         )
-        backend = "piper"
+    else:
+        backend = _menu(console, "Voice engine", usable)
 
-    separate = Confirm.ask(
-        "\n[bold]Separate voices from music?[/bold] [dim](keeps the score)[/dim]",
+    # Separation and per-character casting are right for nearly every source,
+    # and both are visible in the output if they go wrong, so they are not worth
+    # a question each.
+    separate = diarize = True
+    if not Confirm.ask(
+        "\n[bold]Use the recommended settings?[/bold] [dim](separate the music, "
+        "give each character their own voice, keep the original cast quietly "
+        "underneath)[/dim]",
         default=True,
-    )
-    diarize = Confirm.ask(
-        "[bold]Give each character their own voice?[/bold]", default=True
-    )
+    ):
+        separate = Confirm.ask("  separate voices from music?", default=True)
+        diarize = Confirm.ask("  give each character their own voice?",
+                              default=True)
 
-    originals = -16.0
-    if separate:
-        keep = Confirm.ask(
-            "\n[bold]Keep the original cast quietly underneath?[/bold]"
-            " [dim](laughter and reactions stay audible)[/dim]",
-            default=True,
-        )
-        originals = -16.0 if keep else None
+        originals = -16.0 if Confirm.ask(
+            "  keep the original cast quietly underneath?", default=True
+        ) else None
+    else:
+        originals = -16.0
+    if not separate:
+        originals = None
 
     out = Prompt.ask("\n[bold]Write to[/bold]", default="dubbed.mkv").strip()
 

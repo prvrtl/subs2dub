@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "subs2dub"
+version = "0.2.0"
+description = "Turn an existing subtitle track into a synced dub"
+requires-python = ">=3.10,<3.12"
+license = { text = "MIT" }
+dynamic = ["dependencies"]
+
+[project.scripts]
+subs2dub = "subs2dub.cli:main"
+
+[tool.setuptools]
+packages = ["subs2dub"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }

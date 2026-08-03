@@ -442,7 +442,12 @@ class FishSpeechTTS:
 
         python = self.repo / ".venv" / "bin" / "python"
         if not python.exists():
-            raise RuntimeError(f"no Fish Speech venv at {python}")
+            raise SystemExit(
+                "the fish engine is not installed yet.\n"
+                "  it needs its own checkout, because it pins a torch version\n"
+                "  that conflicts with this one. Install it with:\n\n"
+                "      ./scripts/setup.sh --fish\n"
+            )
 
         decoder = self.checkpoint / "firefly-gan-vq-fsq-8x1024-21hz-generator.pth"
         cfg = {
@@ -628,7 +633,12 @@ class _WorkerBackend:
 
         python = self.repo / ".venv" / "bin" / "python"
         if not python.exists():
-            raise RuntimeError(f"no {self.tag} venv at {python}")
+            raise SystemExit(
+                f"the {self.tag} engine is not installed yet.\n"
+                f"  it needs its own checkout, because it pins a torch version\n"
+                f"  that conflicts with this one. Install it with:\n\n"
+                f"      ./scripts/setup.sh --{self.tag}\n"
+            )
 
         worker = Path(__file__).with_name(self.worker)
         self._log = open(

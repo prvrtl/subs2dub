@@ -9,6 +9,40 @@ cd "$(dirname "$0")/.."
 
 PYTHON="${PYTHON:-python3.11}"
 
+# Each large speech engine pins its own torch, so it gets its own checkout and
+# virtualenv rather than fighting this one.
+install_engine() {
+  name="$1" repo="$2" dir="${3:-$HOME/Developer/$1}"
+  echo "==> installing the $name engine into $dir"
+  [ -d "$dir" ] || GIT_LFS_SKIP_SMUDGE=1 git clone --quiet "$repo" "$dir"
+  [ -d "$dir/.venv" ] || "$PYTHON" -m venv "$dir/.venv"
+  "$dir/.venv/bin/pip" install --quiet --upgrade pip
+  # The pinned torch is often unavailable for the current Python; the engines
+  # work with newer ones.
+  sed -E 's/==2\.[0-9]+\.[0-9]+//; s/transformers==[0-9.]+/transformers/' \
+      "$dir/requirements.txt" | grep -v '^spaces$' > /tmp/subs2dub-reqs.txt
+  "$dir/.venv/bin/pip" install --quiet -r /tmp/subs2dub-reqs.txt
+  echo "    $name ready"
+}
+
+case "${1:-}" in
+  --styletts2)
+    install_engine styletts2-ukrainian \
+      https://huggingface.co/spaces/patriotyk/styletts2-ukrainian
+    exit 0
+    ;;
+  --fish)
+    echo "==> installing Fish Speech (see README; it needs a checkpoint too)"
+    dir="$HOME/Developer/fish-speech"
+    [ -d "$dir" ] || git clone --quiet --branch v1.5.0 \
+      https://github.com/fishaudio/fish-speech "$dir"
+    [ -d "$dir/.venv" ] || "$PYTHON" -m venv "$dir/.venv"
+    "$dir/.venv/bin/pip" install --quiet -e "$dir"
+    echo "    fish-speech ready"
+    exit 0
+    ;;
+esac
+
 echo "==> checking system dependencies"
 missing=()
 for bin in ffmpeg ffprobe rubberband espeak-ng; do
@@ -55,4 +89,8 @@ PY
 
 echo
 echo "done. try:"
-echo "  .venv/bin/python -m subs2dub build movie.mkv -o preview.mkv --clip 60:90"
+echo "  ./bin/subs2dub                       # interactive"
+echo "  ./bin/subs2dub movie.mkv             # dub a file"
+echo
+echo "for Ukrainian, also run:"
+echo "  ./scripts/setup.sh --styletts2"

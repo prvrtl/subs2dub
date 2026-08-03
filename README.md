@@ -42,44 +42,42 @@ brew install ffmpeg rubberband espeak-ng      # macOS
 git clone https://github.com/prvrtl/subs2dub.git
 cd subs2dub
 ./scripts/setup.sh
+./scripts/setup.sh --styletts2      # only if you want Ukrainian
 ```
 
 Python 3.10 or 3.11 (most ML wheels do not ship for 3.12+ yet). Model weights
 (~4 GB) download on first run and are cached. Needs ~8 GB free disk.
 
-Ukrainian needs one extra checkout, since StyleTTS2 pins its own torch:
-
-```sh
-git clone https://huggingface.co/spaces/patriotyk/styletts2-ukrainian \
-    ~/Developer/styletts2-ukrainian
-cd ~/Developer/styletts2-ukrainian
-python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
-```
+The Ukrainian engine gets its own checkout and virtualenv, because it pins a
+torch version that conflicts with this one. `--styletts2` handles that.
 
 ## Use
 
-The simplest way is to run it with no arguments. It asks what you want, shows
-how long the job will take, and waits for you to agree before starting:
-
 ```sh
-.venv/bin/python -m subs2dub
+./bin/subs2dub
 ```
 
-Or drive it directly:
+That asks what you want, only offers engines that can speak the language you
+picked, shows how long the job will take, and waits for you to agree.
+
+Or give it a file or URL directly:
+
+```sh
+./bin/subs2dub movie.mkv
+./bin/subs2dub https://youtu.be/VIDEO_ID
+```
+
+The full command line is still there when you need it:
 
 ```sh
 # 90-second preview — use this while tuning, it takes seconds
-.venv/bin/python -m subs2dub build movie.mkv -o preview.mkv --clip 60:90
+./bin/subs2dub movie.mkv -o preview.mkv --clip 60:90
 
-# the whole film, fast preset voices
-.venv/bin/python -m subs2dub build movie.mkv -o dubbed.mkv
+# English, in the original cast's voices
+./bin/subs2dub movie.mkv -o dubbed.mkv --backend chatterbox
 
-# the whole film, in the original cast's voices
-.venv/bin/python -m subs2dub build movie.mkv -o dubbed.mkv \
-    --backend chatterbox
-
-# dub an English video into Ukrainian
-.venv/bin/python -m subs2dub build movie.mkv -o dubbed.mkv \
+# English source, Ukrainian dub
+./bin/subs2dub movie.mkv -o dubbed.mkv \
     --backend styletts2 --target-lang uk --translate-llm
 ```
 
