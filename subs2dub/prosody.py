@@ -81,6 +81,33 @@ def _speech_seconds(seg: np.ndarray, sr: int, frame: float = 0.02) -> float:
     return float((frames > max(0.004, peak * 0.06)).sum()) * frame
 
 
+def _onset(audio: np.ndarray, sr: int, start: float, end: float,
+           look_back: float = 0.35, frame: float = 0.02) -> float:
+    """Where the voice actually starts, relative to the cue.
+
+    Subtitles are cued in early so they can be read before the line is
+    delivered, so a dub laid at the subtitle time drifts against the picture.
+    The offset is small but varies line by line, which is what makes it audible
+    rather than merely constant.
+
+    The look-back is deliberately short: search further and the previous
+    speaker's tail is found instead.
+    """
+    lo = max(0.0, start - look_back)
+    seg = audio[int(lo * sr):int(min(end, start + 4.0) * sr)]
+    n = int(frame * sr)
+    if seg.size < n * 3:
+        return 0.0
+    energy = np.abs(seg[: seg.size // n * n].reshape(-1, n)).mean(axis=1)
+    peak = float(energy.max()) if energy.size else 0.0
+    if peak <= 0:
+        return 0.0
+    voiced = np.flatnonzero(energy > max(0.006, peak * 0.10))
+    if not voiced.size:
+        return 0.0
+    return float(lo + voiced[0] * frame - start)
+
+
 def analyze(cues: list[Cue], vocals_wav, progress=None) -> None:
     """Measure intensity and terminal pitch for every cue, in place."""
     import soundfile as sf
@@ -93,6 +120,7 @@ def analyze(cues: list[Cue], vocals_wav, progress=None) -> None:
     for i, c in enumerate(cues):
         seg = audio[int(c.start * sr):int(c.end * sr)]
         c.source_speech = _speech_seconds(seg, sr)
+        c.speech_onset = _onset(audio, sr, c.start, c.end)
         if seg.size < 0.15 * sr:
             continue
         r = float(np.sqrt(np.mean(seg.astype(np.float64) ** 2)))

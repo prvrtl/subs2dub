@@ -327,7 +327,7 @@ def render_dialogue_track(
 
             report.problems.extend(verify.check_clip(cue, clip, sr))
 
-            at = int(cue.start * sr)
+            at = int(max(0.0, cue.start + cue.speech_onset) * sr)
             end = min(at + clip.size, bus.size)
             bus[at:end] += clip[: end - at]
         if progress is not None:

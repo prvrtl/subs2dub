@@ -88,6 +88,23 @@ def cmd_build(args: argparse.Namespace) -> int:
             return 130
 
 
+def output_for(requested: str, fetched, target_lang: str) -> Path:
+    """Where to write the dub.
+
+    A download is identified by its title, not by whatever the working file was
+    called, and it belongs with the user's other downloads rather than in the
+    checkout.
+    """
+    out = Path(requested).expanduser()
+    if requested != "dubbed.mkv" or fetched is None or not fetched.title:
+        return out
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", fetched.title).strip(" .")
+    name = re.sub(r"\s+", " ", name)[:120] or "dub"
+    downloads = Path.home() / "Downloads"
+    folder = downloads if downloads.is_dir() else Path.cwd()
+    return folder / f"{name}.{target_lang}.mkv"
+
+
 def work_dir_for(source: str, requested: str) -> Path:
     """Give each source its own working directory.
 
@@ -413,7 +430,8 @@ def _build(args: argparse.Namespace) -> int:
         for c in sorted(report.overrun, key=lambda c: -c.overrun)[:args.report_n]:
             print(f"  +{c.overrun:4.1f}s @{c.start:7.1f}s  {len(c.text):3d} chars")
 
-    out = Path(args.out).expanduser()
+    out = output_for(args.out, fetched, args.target_lang)
+    out.parent.mkdir(parents=True, exist_ok=True)
     mux(
         source, dlg, out,
         bed=bed,
