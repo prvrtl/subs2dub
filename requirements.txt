@@ -1,5 +1,6 @@
 # Core pipeline
 pysubs2
+rich
 numpy<2
 soundfile
 pyrubberband

@@ -144,6 +144,48 @@ def _merge_fragments(
     return out
 
 
+# Characters a phonemizer will read aloud rather than treat as punctuation.
+# espeak-ng vocalizes stray quotes and leading dialogue dashes, which is heard
+# as the synthesizer literally speaking the punctuation.
+_QUOTES = str.maketrans("", "", '"“”«»‘’`')
+_LEAD_DASH = re.compile(r"^\s*[-–—]+\s*")
+# A dash used as punctuation: an em/en dash, or the "--" subtitles use for an
+# interruption. Single hyphens are left alone - Ukrainian and English both use
+# them inside words.
+_MID_DASH = re.compile(r"\s*(?:--+|[–—]+)\s*")
+_LEAD_COLON = re.compile(r"^\s*:\s*")
+_PUNCT_RUN = re.compile(r"[.,!?;:]{2,}")
+# Strongest mark in a run wins: a question survives an adjacent comma.
+_RANK = {"?": 4, "!": 3, ".": 2, ";": 1, ":": 1, ",": 0}
+
+
+def _collapse(run: str) -> str:
+    """Reduce a run of punctuation to one mark, keeping ellipses intact."""
+    if set(run) == {"."}:
+        return "..." if len(run) >= 3 else "."
+    return max(run, key=lambda c: _RANK.get(c, 0))
+
+
+def speakable(text: str) -> str:
+    """Normalize a line for synthesis.
+
+    Removes glyphs a phonemizer would read aloud, while preserving punctuation
+    that carries prosody: terminal '?' and '!' drive intonation, commas and
+    ellipses drive pauses.
+    """
+    t = _LEAD_DASH.sub("", text)
+    t = t.translate(_QUOTES)
+    t = t.replace("…", "...")
+    t = _MID_DASH.sub(", ", t)  # an em dash reads as a pause, not a word
+    t = _LEAD_COLON.sub("", t)
+    t = re.sub(r"\s+([,.!?;:])", r"\1", t)
+    t = _PUNCT_RUN.sub(lambda m: _collapse(m.group()), t)
+    t = re.sub(r"\s+", " ", t).strip(" -–—:;,")
+    if t and t[-1] not in ".!?":
+        t += "."  # a bare fragment otherwise gets no closing intonation
+    return t
+
+
 def gaps(cues: list[Cue], total_duration: float) -> list[float]:
     """Seconds of silence following each cue, before the next one starts."""
     out = []

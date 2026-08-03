@@ -38,8 +38,14 @@ def cast(
     f0_by_speaker: dict[int, float],
     *,
     default_voice: str = "af_heart",
+    pools: dict[str, list[str]] | None = None,
 ) -> dict[str, str]:
-    """Map speaker id -> voice name, and write `voice` onto each cue."""
+    """Map speaker id -> voice name, and write `voice` onto each cue.
+
+    `pools` supplies gendered voice lists for the active backend; without it the
+    Kokoro English voices are used. Backends for other languages expose their own
+    via `voice_pools()`.
+    """
     counts = Counter(c.speaker for c in cues if c.speaker)
     if not counts:
         for c in cues:
@@ -62,10 +68,16 @@ def cast(
     for i, spk in enumerate(unknown):
         genders[spk] = "F" if i % 2 == 0 else "M"
 
-    fem, mal = list(FEMALE_POOL), list(MALE_POOL)
+    fem = list((pools or {}).get("F") or FEMALE_POOL)
+    mal = list((pools or {}).get("M") or MALE_POOL)
     mapping: dict[str, str] = {}
     for spk in order:
         pool = fem if genders[spk] == "F" else mal
+        # Small voice sets (Piper has five for Ukrainian) run out before the
+        # cast does; reuse in order rather than collapsing everyone onto one.
+        if not pool:
+            pool = list((pools or {}).get(genders[spk]) or
+                        (FEMALE_POOL if genders[spk] == "F" else MALE_POOL))
         mapping[spk] = pool.pop(0) if pool else default_voice
 
     for c in cues:

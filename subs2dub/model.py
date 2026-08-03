@@ -29,6 +29,8 @@ class Cue:
     stretch: float = 1.0
     borrowed: float = 0.0
     overrun: float = 0.0
+    overlapped: float = 0.0  # seconds running under the following line
+    truncated: float = 0.0  # seconds of speech lost to the window
 
     # Set by the prosody pass, measured off the original actor's voice.
     gain_db: float = 0.0

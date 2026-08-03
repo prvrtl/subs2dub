@@ -11,12 +11,19 @@ vendor/
 # Third-party source fetched at setup time
 OpenVoice/
 
-# Working directory: stems, caches, references, synthesized audio.
+# Working directories: stems, caches, references, synthesized audio.
 # Everything here is derived from copyrighted source material.
 work/
+work_*/
 *.srt
 *.ass
 *.vtt
+*.lab
+
+# Weights downloaded at runtime. Redistributing them here would both bloat the
+# repository and re-license someone else's model.
+models/
+checkpoints/
 
 # Media. Never commit source films, clips, previews or rendered dubs.
 *.mkv

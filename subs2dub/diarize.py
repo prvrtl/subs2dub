@@ -109,7 +109,26 @@ def embed_cues(
         if progress and (i + 1) % 25 == 0:
             progress(i + 1, len(cues))
 
+    # Translation and synthesis follow and want the memory. Going out of scope
+    # is not enough: the allocator keeps freed blocks charged to the process.
+    del encoder
+    _release(torch)
+
     return embs, valid
+
+
+def _release(torch) -> None:
+    """Return cached allocator blocks to the OS."""
+    import gc
+
+    gc.collect()
+    for backend in (getattr(torch, "mps", None), getattr(torch, "cuda", None)):
+        empty = getattr(backend, "empty_cache", None)
+        if empty is not None:
+            try:
+                empty()
+            except Exception:
+                pass
 
 
 def _refine(X: np.ndarray, labels: np.ndarray, iters: int = 5) -> np.ndarray:

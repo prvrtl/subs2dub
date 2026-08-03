@@ -24,6 +24,21 @@ _MIN_CUE = 1.0  # shorter cues carry too little voice to be worth splicing
 _GAP = 0.25  # silence between spliced pieces
 
 
+def _join(pieces: list[np.ndarray], sr: int, fade: float = 0.02) -> np.ndarray:
+    """Concatenate speech segments with a short crossfade at each seam."""
+    n = int(fade * sr)
+    out = pieces[0]
+    for seg in pieces[1:]:
+        overlap = min(n, out.size, seg.size)
+        if overlap <= 0:
+            out = np.concatenate([out, seg])
+            continue
+        ramp = np.linspace(0.0, 1.0, overlap, dtype=np.float32)
+        seam = out[-overlap:] * (1.0 - ramp) + seg[:overlap] * ramp
+        out = np.concatenate([out[:-overlap], seam, seg[overlap:]])
+    return out
+
+
 def build_references(
     cues: list[Cue],
     vocals_wav: Path,
@@ -55,30 +70,38 @@ def build_references(
             if rms < 1e-4:
                 continue
             # Favour loud, long lines - both correlate with clean solo speech.
-            scored.append((rms * min(seg.size / sr, 6.0), seg))
+            scored.append((rms * min(seg.size / sr, 6.0), seg, c))
 
         if not scored:
             continue
         scored.sort(key=lambda x: -x[0])
 
-        pieces, total = [], 0.0
-        for _, seg in scored:
+        pieces, spoken, total = [], [], 0.0
+        for _, seg, c in scored:
             pieces.append(seg)
+            spoken.append(c.source_text or c.text)
             total += seg.size / sr
             if total >= target:
                 break
         if total < MIN_SECONDS:
             continue
 
-        joined = np.concatenate(
-            [p for seg in pieces for p in (seg, silence)][:-1]
-        )
+        # Butt the pieces together with a short crossfade rather than padding
+        # them apart. An in-context model treats the reference as an example of
+        # how this character talks, so inserted gaps teach it to leave gaps.
+        joined = _join(pieces, sr)
         peak = float(np.max(np.abs(joined)) or 0)
         if peak > 0:
             joined = joined * (0.95 / peak)
 
         path = out_dir / f"{spk}.wav"
         sf.write(path, joined, sr, subtype="PCM_16")
+        # Transcript sidecar, named the way Fish Speech expects. Backends that
+        # want to know what the reference says clone more accurately with it;
+        # the rest ignore the file.
+        path.with_suffix(".lab").write_text(
+            " ".join(t for t in spoken if t).strip(), encoding="utf-8"
+        )
         refs[spk] = path
 
     return refs
