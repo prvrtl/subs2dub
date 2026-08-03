@@ -1,24 +1,16 @@
 #!/usr/bin/env bash
-# Set up subs2dub: virtualenv, Python deps, and the OpenVoice tone-colour
-# converter used by --voice-convert.
-#
-# Model weights (~4 GB total) download on first run and are cached afterwards.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 PYTHON="${PYTHON:-python3.11}"
 
-# Each large speech engine pins its own torch, so it gets its own checkout and
-# virtualenv rather than fighting this one.
 install_engine() {
   name="$1" repo="$2" dir="${3:-$HOME/Developer/$1}"
   echo "==> installing the $name engine into $dir"
   [ -d "$dir" ] || GIT_LFS_SKIP_SMUDGE=1 git clone --quiet "$repo" "$dir"
   [ -d "$dir/.venv" ] || "$PYTHON" -m venv "$dir/.venv"
   "$dir/.venv/bin/pip" install --quiet --upgrade pip
-  # The pinned torch is often unavailable for the current Python; the engines
-  # work with newer ones.
   sed -E 's/==2\.[0-9]+\.[0-9]+//; s/transformers==[0-9.]+/transformers/' \
       "$dir/requirements.txt" | grep -v '^spaces$' > /tmp/subs2dub-reqs.txt
   "$dir/.venv/bin/pip" install --quiet -r /tmp/subs2dub-reqs.txt
@@ -69,9 +61,6 @@ echo "==> installing Python dependencies (several minutes)"
 .venv/bin/pip install --quiet -r requirements.txt
 
 echo "==> vendoring the OpenVoice tone-colour converter"
-# Only the converter is used. Its declared dependencies (numpy 1.22, librosa
-# 0.9, faster-whisper, gradio) conflict with the rest of the pipeline, and none
-# are needed: se_extractor is bypassed by supplying reference clips directly.
 if [ ! -d vendor/openvoice ]; then
   rm -rf .openvoice-src
   git clone --depth 1 --quiet https://github.com/myshell-ai/OpenVoice.git .openvoice-src

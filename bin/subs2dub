@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# Run subs2dub without needing to know where its virtualenv lives.
-#
-#   subs2dub                     interactive
-#   subs2dub movie.mkv           dub a file
-#   subs2dub build ... --flags   the full command line
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,8 +10,6 @@ if [ ! -x "$python" ]; then
   exit 1
 fi
 
-# A bare path or URL is the common case, so treat it as `build <that>` rather
-# than making people remember the subcommand.
 if [ $# -gt 0 ]; then
   case "$1" in
     build|wizard|-h|--help) ;;

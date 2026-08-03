@@ -3,383 +3,334 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>subs2dub — dub a film from its subtitles</title>
-<meta name="description" content="Turn an existing subtitle track into a synced dub. Runs locally, no API keys.">
+<title>subs2dub — dub a film from its subtitle track</title>
+<meta name="description" content="Generate a synced dub from a video's existing subtitle track. Runs locally.">
 <style>
-:root {
-  --bg:      #F7F7F4;
-  --surface: #FFFFFF;
-  --ink:     #1B1E20;
-  --muted:   #626A6F;
-  --rule:    #DFDED8;
-  --accent:  #A8761C;
-  --ok:      #3F6E60;
-  --warn:    #9A5B33;
-
-  --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Code",
-          "JetBrains Mono", Menlo, Consolas, monospace;
-  --prose: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-           "Helvetica Neue", sans-serif;
-
-  --measure: 70ch;
+:root{
+  --ink:#0a0e13;
+  --ink-2:#0f151d;
+  --panel:#131b25;
+  --line:#1f2a37;
+  --line-2:#2b3948;
+  --text:#dbe3ec;
+  --text-dim:#8b9aad;
+  --text-faint:#5d6c7e;
+  --dub:#e8a33d;
+  --dub-soft:rgba(232,163,61,.14);
+  --orig:#4a6b84;
+  --ok:#5fbf8f;
+  --warn:#d9a441;
+  --bad:#d1685f;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
 }
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg:      #141719;
-    --surface: #1B1F22;
-    --ink:     #E6E4DE;
-    --muted:   #8B9196;
-    --rule:    #2A2F33;
-    --accent:  #E4B363;
-    --ok:      #6FA292;
-    --warn:    #C98A5E;
-  }
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--ink);color:var(--text);
+  font:16px/1.65 var(--sans);
+  -webkit-font-smoothing:antialiased;
 }
-:root[data-theme="dark"] {
-  --bg:      #141719;
-  --surface: #1B1F22;
-  --ink:     #E6E4DE;
-  --muted:   #8B9196;
-  --rule:    #2A2F33;
-  --accent:  #E4B363;
-  --ok:      #6FA292;
-  --warn:    #C98A5E;
+.wrap{max-width:960px;margin:0 auto;padding:0 24px}
+a{color:var(--dub);text-decoration:none}
+a:hover{text-decoration:underline}
+a:focus-visible{outline:2px solid var(--dub);outline-offset:3px;border-radius:2px}
+code,pre,.mono{font-family:var(--mono)}
+h1,h2,h3{text-wrap:balance;margin:0}
+
+header{border-bottom:1px solid var(--line);background:
+  radial-gradient(120% 90% at 15% -10%,rgba(232,163,61,.07),transparent 60%),
+  linear-gradient(var(--ink-2),var(--ink))}
+.hero{padding:76px 0 60px}
+.tag{
+  font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--dub);display:inline-flex;align-items:center;gap:9px;margin-bottom:22px
 }
-:root[data-theme="light"] {
-  --bg:      #F7F7F4;
-  --surface: #FFFFFF;
-  --ink:     #1B1E20;
-  --muted:   #626A6F;
-  --rule:    #DFDED8;
-  --accent:  #A8761C;
-  --ok:      #3F6E60;
-  --warn:    #9A5B33;
+.tag::before{content:"";width:22px;height:1px;background:var(--dub);opacity:.6}
+h1{font-family:var(--mono);font-size:clamp(34px,6vw,54px);letter-spacing:-.03em;font-weight:600}
+.lede{font-size:clamp(17px,2.3vw,20px);color:var(--text-dim);max-width:60ch;margin:20px 0 0;line-height:1.55}
+.lede strong{color:var(--text);font-weight:600}
+
+.cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:34px;align-items:center}
+.cmd{
+  font-family:var(--mono);font-size:13.5px;background:var(--ink);
+  border:1px solid var(--line-2);border-radius:7px;padding:11px 15px;color:var(--text)
 }
-
-* { box-sizing: border-box; }
-
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--ink);
-  font-family: var(--prose);
-  font-size: 16px;
-  line-height: 1.65;
-  -webkit-font-smoothing: antialiased;
+.cmd .p{color:var(--dub);user-select:none}
+.btn{
+  font-size:14px;font-weight:600;padding:11px 18px;border-radius:7px;
+  border:1px solid var(--line-2);color:var(--text);background:var(--panel)
 }
+.btn:hover{border-color:var(--dub);text-decoration:none}
 
-.wrap {
-  max-width: var(--measure);
-  margin: 0 auto;
-  padding: 0 24px 96px;
+.viz{margin:52px 0 0;border:1px solid var(--line);border-radius:10px;background:var(--ink-2);overflow:hidden}
+.viz-head{
+  display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;
+  padding:12px 16px;border-bottom:1px solid var(--line);
+  font-family:var(--mono);font-size:11.5px;color:var(--text-faint);letter-spacing:.05em
 }
+.legend{display:flex;gap:16px;flex-wrap:wrap}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:middle}
+.rows{padding:14px 16px 18px;overflow-x:auto}
+.row{display:grid;grid-template-columns:52px 1fr 104px;align-items:center;gap:12px;min-width:520px;padding:5px 0}
+.t{font-family:var(--mono);font-size:11.5px;color:var(--text-faint);text-align:right}
+.track{position:relative;height:22px;border-radius:4px;background:rgba(74,107,132,.13);border:1px solid rgba(74,107,132,.3)}
+.orig{position:absolute;top:4px;height:14px;border-radius:3px;background:repeating-linear-gradient(90deg,var(--orig) 0 2px,transparent 2px 4px);opacity:.75}
+.clip{position:absolute;top:3px;height:16px;border-radius:3px;background:var(--dub-soft);border:1px solid var(--dub)}
+.clip.s{border-style:dashed}
+.clip.o{border-color:var(--bad);background:rgba(209,104,95,.15)}
+.note{font-family:var(--mono);font-size:11px;color:var(--text-faint)}
+.note.g{color:var(--ok)}.note.w{color:var(--warn)}.note.b{color:var(--bad)}
 
-/* ---- masthead ---------------------------------------------------------- */
+section{padding:64px 0;border-bottom:1px solid var(--line)}
+h2{font-family:var(--mono);font-size:13px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-faint);margin-bottom:26px}
+h3{font-size:17px;font-weight:600;letter-spacing:-.01em;margin-bottom:8px}
+p{margin:0 0 16px}
+.grid{display:grid;gap:26px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+.card p{color:var(--text-dim);font-size:14.5px;margin:0}
+.card .k{font-family:var(--mono);font-size:11px;color:var(--dub);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:9px}
 
-header {
-  padding: 72px 0 40px;
-  border-bottom: 1px solid var(--rule);
-  margin-bottom: 48px;
+table{width:100%;border-collapse:collapse;font-size:14px}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-faint);font-weight:500}
+td:first-child{font-family:var(--mono);color:var(--text)}
+td.n{font-variant-numeric:tabular-nums;color:var(--text-dim)}
+.yes{color:var(--ok)}.no{color:var(--text-faint)}
+
+pre{
+  font-size:12.5px;line-height:1.75;background:var(--ink-2);border:1px solid var(--line);
+  border-radius:9px;padding:16px 18px;overflow-x:auto;margin:0;color:var(--text-dim)
 }
+pre .c{color:var(--text-faint)}
+pre .g{color:var(--ok)}pre .w{color:var(--warn)}pre .a{color:var(--dub)}
+.two{display:grid;gap:22px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));align-items:start}
+.body-copy{color:var(--text-dim);font-size:14.5px}
 
-h1 {
-  font-family: var(--mono);
-  font-size: 1.75rem;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  margin: 0 0 12px;
-}
+ul{margin:0;padding-left:18px;color:var(--text-dim);font-size:14.5px}
+li{margin-bottom:9px}
+li::marker{color:var(--text-faint)}
 
-.tagline {
-  font-size: 1.125rem;
-  margin: 0 0 8px;
-  text-wrap: balance;
-}
-
-.sub {
-  color: var(--muted);
-  margin: 0;
-  font-size: 0.9375rem;
-}
-
-/* ---- sections ---------------------------------------------------------- */
-
-section { margin-bottom: 52px; }
-
-h2 {
-  font-family: var(--mono);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-  margin: 0 0 20px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--rule);
-}
-
-h3 {
-  font-family: var(--mono);
-  font-size: 0.9375rem;
-  font-weight: 600;
-  margin: 28px 0 8px;
-}
-
-p { margin: 0 0 16px; }
-p:last-child { margin-bottom: 0; }
-
-a {
-  color: var(--accent);
-  text-underline-offset: 2px;
-  text-decoration-thickness: 1px;
-}
-a:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 2px;
-}
-
-ul { margin: 0 0 16px; padding-left: 20px; }
-li { margin-bottom: 6px; }
-
-code {
-  font-family: var(--mono);
-  font-size: 0.875em;
-  background: var(--surface);
-  border: 1px solid var(--rule);
-  border-radius: 3px;
-  padding: 1px 5px;
-}
-
-pre {
-  font-family: var(--mono);
-  font-size: 0.8125rem;
-  line-height: 1.7;
-  background: var(--surface);
-  border: 1px solid var(--rule);
-  border-radius: 4px;
-  padding: 16px 18px;
-  overflow-x: auto;
-  margin: 0 0 16px;
-}
-pre code { background: none; border: 0; padding: 0; font-size: inherit; }
-.cmt { color: var(--muted); }
-.flag { color: var(--accent); }
-
-/* ---- cue window diagram ------------------------------------------------ */
-
-.cue {
-  display: grid;
-  grid-template-columns: 5.5rem 1fr;
-  gap: 6px 14px;
-  align-items: center;
-  font-family: var(--mono);
-  font-size: 0.75rem;
-  margin: 0 0 14px;
-}
-
-.cue .lbl {
-  color: var(--muted);
-  text-align: right;
-  white-space: nowrap;
-}
-
-.track {
-  position: relative;
-  height: 22px;
-  border-left: 2px solid var(--rule);
-  border-right: 2px solid var(--rule);
-  background: repeating-linear-gradient(
-    90deg, transparent 0 7px, var(--rule) 7px 8px);
-}
-
-.bar {
-  position: absolute;
-  top: 3px;
-  bottom: 3px;
-  left: 0;
-  border-radius: 2px;
-  background: var(--muted);
-  opacity: 0.55;
-}
-.bar.over  { width: 128%; background: var(--warn); opacity: 0.75; }
-.bar.fits  { width: 92%;  background: var(--ok);   opacity: 0.75; }
-
-.caption {
-  font-size: 0.8125rem;
-  color: var(--muted);
-  margin: 0;
-}
-
-/* ---- table ------------------------------------------------------------- */
-
-.scroll { overflow-x: auto; margin: 0 0 16px; }
-
-table {
-  border-collapse: collapse;
-  width: 100%;
-  font-size: 0.875rem;
-  font-variant-numeric: tabular-nums;
-}
-th, td {
-  text-align: left;
-  padding: 9px 14px 9px 0;
-  border-bottom: 1px solid var(--rule);
-  white-space: nowrap;
-}
-th {
-  font-family: var(--mono);
-  font-size: 0.6875rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  font-weight: 600;
-}
-td:first-child { font-family: var(--mono); font-size: 0.8125rem; }
-.yes { color: var(--ok); }
-.no  { color: var(--muted); }
-
-/* ---- footer ------------------------------------------------------------ */
-
-footer {
-  border-top: 1px solid var(--rule);
-  padding-top: 24px;
-  font-size: 0.875rem;
-  color: var(--muted);
-}
-footer a { color: var(--accent); }
-
-@media (max-width: 560px) {
-  header { padding-top: 48px; }
-  .cue { grid-template-columns: 1fr; gap: 4px; }
-  .cue .lbl { text-align: left; }
+footer{padding:44px 0;color:var(--text-faint);font-size:13.5px}
+footer p{margin:0 0 8px}
+@media (prefers-reduced-motion:no-preference){
+  .clip{animation:grow .7s cubic-bezier(.2,.8,.2,1) backwards;transform-origin:left}
+  .row:nth-child(2) .clip{animation-delay:.05s}
+  .row:nth-child(3) .clip{animation-delay:.1s}
+  .row:nth-child(4) .clip{animation-delay:.15s}
+  .row:nth-child(5) .clip{animation-delay:.2s}
+  @keyframes grow{from{transform:scaleX(.3);opacity:0}}
 }
 </style>
 </head>
 <body>
-<div class="wrap">
 
 <header>
-  <h1>subs2dub</h1>
-  <p class="tagline">Turn an existing subtitle track into a synced dub.</p>
-  <p class="sub">Runs locally. No API keys, no account, no per-character billing.</p>
+  <div class="wrap hero">
+    <div class="tag">local dubbing pipeline</div>
+    <h1>subs2dub</h1>
+    <p class="lede">Generate a synced dub from a video's <strong>existing subtitle
+    track</strong>. The subtitles are the script; their timings are the sync
+    target.</p>
+
+    <div class="cta">
+      <span class="cmd"><span class="p">$</span> ./bin/subs2dub movie.mkv</span>
+      <a class="btn" href="https://github.com/prvrtl/subs2dub">Source on GitHub</a>
+    </div>
+
+    <div class="viz">
+      <div class="viz-head">
+        <span>fitting speech into cue windows</span>
+        <span class="legend">
+          <span><i style="background:var(--orig)"></i>original</span>
+          <span><i style="background:var(--dub);opacity:.85"></i>dub</span>
+        </span>
+      </div>
+      <div class="rows">
+        <div class="row">
+          <span class="t">0.0s</span>
+          <span class="track"><span class="orig" style="left:2%;width:88%"></span>
+            <span class="clip" style="left:2%;width:84%"></span></span>
+          <span class="note g">fits</span>
+        </div>
+        <div class="row">
+          <span class="t">11.7s</span>
+          <span class="track"><span class="orig" style="left:3%;width:52%"></span>
+            <span class="clip" style="left:3%;width:50%"></span></span>
+          <span class="note g">fits</span>
+        </div>
+        <div class="row">
+          <span class="t">22.2s</span>
+          <span class="track"><span class="orig" style="left:2%;width:80%"></span>
+            <span class="clip s" style="left:2%;width:78%"></span></span>
+          <span class="note w">&times;1.12 faster</span>
+        </div>
+        <div class="row">
+          <span class="t">33.6s</span>
+          <span class="track"><span class="orig" style="left:4%;width:44%"></span>
+            <span class="clip" style="left:4%;width:41%"></span></span>
+          <span class="note g">tempo matched</span>
+        </div>
+        <div class="row">
+          <span class="t">44.8s</span>
+          <span class="track"><span class="orig" style="left:2%;width:70%"></span>
+            <span class="clip o" style="left:2%;width:96%"></span></span>
+          <span class="note b">trimmed</span>
+        </div>
+      </div>
+    </div>
+  </div>
 </header>
 
 <section>
-  <p>Most dubbing pipelines transcribe the source with Whisper and machine-translate
-  it. If you already have good subtitles, that throws away the best asset you have —
-  a human translation. <code>subs2dub</code> treats the subtitle file as the script.</p>
-</section>
-
-<section>
-  <h2>The hard part is timing</h2>
-  <p>A subtitle cue is a fixed window. Synthesized speech is whatever length it
-  happens to be. Everything else follows from reconciling those two facts.</p>
-
-  <div class="cue">
-    <span class="lbl">cue window</span>
-    <div class="track"></div>
-    <span class="lbl">raw speech</span>
-    <div class="track"><span class="bar over"></span></div>
-    <span class="lbl">after fitting</span>
-    <div class="track"><span class="bar fits"></span></div>
+  <div class="wrap">
+    <h2>Approach</h2>
+    <div class="grid">
+      <div class="card">
+        <span class="k">Script</span>
+        <h3>Subtitles, not transcription</h3>
+        <p>Whisper-based pipelines discard a human translation and add
+        transcription error. The subtitle file is used directly.</p>
+      </div>
+      <div class="card">
+        <span class="k">Cast</span>
+        <h3>Voices from the original</h3>
+        <p>Speech is separated from music, each line attributed to a speaker,
+        and every character cloned from a reference clip of the actor.</p>
+      </div>
+      <div class="card">
+        <span class="k">Timing</span>
+        <h3>The actor's tempo</h3>
+        <p>Lines are fitted to how long the original speaks, measured from the
+        vocal stem — not to how long a subtitle sits on screen.</p>
+      </div>
+      <div class="card">
+        <span class="k">Mix</span>
+        <h3>The room stays</h3>
+        <p>The original cast is kept quietly underneath and ducked, so laughter
+        and reactions survive rather than being stripped out.</p>
+      </div>
+    </div>
   </div>
-  <p class="caption">Four levers, applied in order of how much they degrade the
-  audio: leave it alone, borrow silence from the following gap, re-synthesize
-  faster, then pitch-preserving time-stretch — capped, because past ~15% it
-  audibly wobbles.</p>
-
-  <p>Roughly three quarters of lines need no manipulation at all, and speech
-  starts within about 35&nbsp;ms of the cue start. Lines that still overrun are
-  reported rather than degraded further — they have more syllables than the
-  window allows, which is a writing problem, not an audio one.</p>
 </section>
 
 <section>
-  <h2>What else it does</h2>
-  <ul>
-    <li>Removes the original dialogue instead of ducking it, so the dub isn't
-      competing with the source language</li>
-    <li>Works out who speaks each line and gives each character a distinct voice</li>
-    <li>Optionally clones each character from the original performer while keeping
-      native pronunciation</li>
-    <li>Copies each actor's delivery — loudness, emphasis, question intonation</li>
-    <li>Keeps the original audio as a second track, so the result is still
-      watchable in the source language</li>
-  </ul>
+  <div class="wrap">
+    <h2>Engines</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Engine</th><th>Languages</th><th>Clones cast</th><th>Speed control</th><th>2 h film</th></tr></thead>
+        <tbody>
+          <tr><td>styletts2</td><td class="n">Ukrainian</td><td class="yes">yes</td><td class="yes">yes</td><td class="n">~40 min</td></tr>
+          <tr><td>kokoro</td><td class="n">English</td><td class="no">no</td><td class="yes">yes</td><td class="n">~8 min</td></tr>
+          <tr><td>chatterbox</td><td class="n">English</td><td class="yes">yes</td><td class="no">no</td><td class="n">~6 h</td></tr>
+          <tr><td>piper</td><td class="n">many</td><td class="no">no</td><td class="yes">yes</td><td class="n">~4 min</td></tr>
+          <tr><td>fish</td><td class="n">Ukrainian</td><td class="yes">yes</td><td class="no">no</td><td class="n">~4 h</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="body-copy" style="margin-top:20px;max-width:70ch">
+      Autoregressive engines generate audio one token at a time and can stall
+      mid-line or fail to stop. StyleTTS2 predicts phoneme durations in a single
+      pass, which makes both failure modes impossible and accounts for the
+      order-of-magnitude difference.</p>
+  </div>
 </section>
 
 <section>
-  <h2>Install</h2>
-<pre><code><span class="cmt"># macOS</span>
+  <div class="wrap">
+    <h2>Verification</h2>
+    <div class="two">
+      <div>
+        <p class="body-copy">Fit statistics do not say whether a result is
+        listenable — a line can fit because half of it was cut. Every render
+        inspects its own audio and names what is wrong.</p>
+        <p class="body-copy">Clips that fail are redrawn before reaching the
+        track. Per-cue detail is written to
+        <code style="font-size:13px;color:var(--text)">render.json</code>.</p>
+      </div>
+      <pre><span class="c">26 cues:</span> <span class="g">15 fit as-is</span>, 11 re-synthesized faster,
+          9 time-stretched, 3 lengthened to fill,
+          <span class="g">0 still overrun (0.0%)</span>
+<span class="c">verify:</span> <span class="g">0 serious</span>, <span class="w">1 minor</span> across 26 cues
+<span class="c">wrote</span> <span class="a">out.mkv</span> (21 MB) in 60s</pre>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Automatic captions</h2>
+    <div class="two">
+      <div>
+        <p class="body-copy">Auto-captions are not subtitles. They arrive as a
+        rolling window — each event repeats the previous words and appends a
+        few — and carry no sentence punctuation.</p>
+        <p class="body-copy">Read literally, the dialogue multiplies and the dub
+        has to race to fit words nobody said twice. The track is classified and
+        only the repairs it needs are applied.</p>
+      </div>
+      <pre><span class="c">raw</span>  so what brings you to the city today
+<span class="c">raw</span>  so what brings you to the city today
+<span class="c">raw</span>  so what brings you to the city today i have a
+
+<span class="a">automatic captions (rolling): 45 lines</span>
+  <span class="g">482 repeated words removed</span>
+  26 cues at 4.2s, was 11 at 10.4s</pre>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Install</h2>
+    <pre><span class="c"># macOS</span>
 brew install ffmpeg rubberband espeak-ng
 
 git clone https://github.com/prvrtl/subs2dub.git
 cd subs2dub
-./scripts/setup.sh</code></pre>
-  <p class="caption">Python 3.10 or 3.11. Model weights (~4&nbsp;GB) download on
-  first run and are cached. Needs about 8&nbsp;GB free disk.</p>
-</section>
+./scripts/setup.sh
+./scripts/setup.sh --styletts2      <span class="c"># Ukrainian speech</span>
 
-<section>
-  <h2>Use</h2>
-<pre><code><span class="cmt"># 90-second preview — use this while tuning</span>
-python -m subs2dub build movie.mkv -o preview.mkv <span class="flag">--clip</span> 60:90
+<span class="c"># interactive, with a runtime estimate</span>
+./bin/subs2dub
 
-<span class="cmt"># the whole film, in the original cast's voices</span>
-python -m subs2dub build movie.mkv -o dubbed.mkv \
-    <span class="flag">--backend</span> chatterbox <span class="flag">--voice-convert</span></code></pre>
-  <p>Subtitles are pulled out of the container automatically. Renders are cached,
-  so an interrupted job resumes where it stopped.</p>
-</section>
-
-<section>
-  <h2>Pick your tradeoff</h2>
-  <p>Native pronunciation, the original actor's voice, and expressive delivery
-  trade against render time. Figures are for a two-hour film on an M1&nbsp;Pro.</p>
-  <div class="scroll">
-  <table>
-    <thead>
-      <tr><th>Configuration</th><th>Native</th><th>Actor</th><th>Emotion</th><th>Time</th></tr>
-    </thead>
-    <tbody>
-      <tr><td>kokoro</td><td class="yes">yes</td><td class="no">no</td><td class="no">no</td><td>~8 min</td></tr>
-      <tr><td>chatterbox</td><td class="no">accent</td><td class="yes">yes</td><td class="yes">yes</td><td>~6 h</td></tr>
-      <tr><td>kokoro + convert</td><td class="yes">yes</td><td class="yes">yes</td><td class="no">no</td><td>~30 min</td></tr>
-      <tr><td>chatterbox + convert</td><td class="yes">yes</td><td class="yes">yes</td><td class="yes">yes</td><td>~7.5 h</td></tr>
-    </tbody>
-  </table>
+<span class="c"># English source, Ukrainian dub</span>
+./bin/subs2dub movie.mkv -o out.mkv \
+    --backend styletts2 --target-lang uk --translate-llm</pre>
+    <p class="body-copy" style="margin-top:18px">
+      Python 3.10 or 3.11. Model weights (~8 GB) download on first run. 16 GB
+      RAM is sufficient; stages run sequentially and release their models.</p>
   </div>
-  <p>The last row is the best quality available locally. Expressive models are
-  roughly 60× slower than the fast one — that's inherent, not a tuning problem.</p>
-  <p>Cloning <em>without</em> conversion inherits the source language's accent,
-  because the model conditions on the whole acoustic style of the reference clip.
-  Conversion fixes it by synthesizing native speech first and transferring only
-  the tone colour.</p>
 </section>
 
 <section>
-  <h2>What it doesn't do well</h2>
-  <ul>
-    <li>Phone calls, shouting and whispering can split one character into two</li>
-    <li>Characters with very few lines may be merged into others</li>
-    <li>Singing and crowd noise are removed by separation and don't come back;
-      musical numbers play with original audio and no dub</li>
-    <li>Lip sync is approximate — phoneme-accurate sync needs a video model</li>
-    <li>Emotion is derived from how loudly a line was delivered, which captures
-      arousal but not valence: it can't tell frightened from furious</li>
-    <li>OCR artifacts in the source subtitles get pronounced literally</li>
-  </ul>
+  <div class="wrap">
+    <h2>Limitations</h2>
+    <ul>
+      <li>Lip sync is approximate; phoneme-accurate sync requires a video model.</li>
+      <li>Emotion is derived from delivery loudness, capturing arousal but not
+          valence — it cannot separate frightened from furious.</li>
+      <li>Phone calls, shouting and whispering can split one character in two.</li>
+      <li>Songs are removed by separation and are not dubbed.</li>
+      <li>Synthesized Ukrainian runs at 10–13 characters per second. A source
+          speaking at 18 leaves the translator no option but to condense.
+          Scripted film sits inside this range; unscripted speech often does not.</li>
+      <li>Verification detects structural faults, not whether a delivery sounds
+          right. Listen before shipping.</li>
+    </ul>
+  </div>
 </section>
 
 <footer>
-  <p><a href="https://github.com/prvrtl/subs2dub">Source on GitHub</a> · MIT licensed ·
-  built on Kokoro, Chatterbox, OpenVoice, Demucs, SpeechBrain, rubberband and ffmpeg</p>
-  <p>Dubbing copyrighted material and cloning real performers' voices carry rights
-  implications that vary by jurisdiction. You're responsible for how you use it.</p>
+  <div class="wrap">
+    <p>MIT licensed. Built on Kokoro, Chatterbox, StyleTTS2, Demucs, SpeechBrain,
+    Piper, rubberband and ffmpeg.</p>
+    <p>Dubbing copyrighted material may require permission from the rights
+    holder. Voice cloning of real performers raises separate personality-rights
+    questions. You are responsible for how you use it.</p>
+  </div>
 </footer>
 
-</div>
 </body>
 </html>
