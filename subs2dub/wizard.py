@@ -15,7 +15,6 @@ from rich.table import Table
 from . import estimate
 from .source import is_url
 
-# Lines of dialogue per minute, used to size a job before subtitles are in hand.
 CUES_PER_MINUTE = 11.0
 
 
@@ -44,7 +43,6 @@ BACKENDS = [
            "noticeably more synthetic than the others"),
 ]
 
-# What each engine can actually speak. None means "many languages".
 BACKEND_LANGS = {
     "styletts2": {"uk"},
     "fish": {"uk"},
@@ -219,9 +217,6 @@ def run(argv: list[str] | None = None) -> int:
     else:
         backend = _menu(console, "Voice engine", usable)
 
-    # Separation and per-character casting are right for nearly every source,
-    # and both are visible in the output if they go wrong, so they are not worth
-    # a question each.
     separate = diarize = True
     if not Confirm.ask(
         "\n[bold]Use the recommended settings?[/bold] [dim](separate the music, "

@@ -17,7 +17,6 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-# cue.voice carries both halves, separated by this token: preset::reference
 VOICE_SEP = "::"
 
 
@@ -44,11 +43,6 @@ class ToneConverter:
         import torch
         from openvoice.api import ToneColorConverter
 
-        # CPU by default, deliberately. OpenVoice's flow decoder calls a
-        # TorchScript-fused op and the JIT graph fuser has no MPS backend, so
-        # MPS dies with "Unknown device for graph fuser" partway through the
-        # first conversion. CPU measures ~0.4x realtime here, which is fast
-        # enough that chasing GPU support is not worth it.
         dev = self.device or "cpu"
         del torch
         try:
@@ -56,7 +50,6 @@ class ToneConverter:
             m.load_ckpt(str(self.ckpt_dir / "checkpoint.pth"))
             self.device = dev
         except Exception:
-            # Some ops still fall over on MPS; CPU is slower but dependable.
             m = ToneColorConverter(str(self.ckpt_dir / "config.json"), device="cpu")
             m.load_ckpt(str(self.ckpt_dir / "checkpoint.pth"))
             self.device = "cpu"
@@ -99,9 +92,6 @@ class ToneConverter:
             model.convert(
                 audio_src_path=str(src), src_se=src_se, tgt_se=tgt_se,
                 output_path=str(dst), tau=tau,
-                # Must be non-empty: string_to_bits("") cannot broadcast into
-                # the (n, 8) bit array. This is OpenVoice's provenance
-                # watermark, so it is left enabled rather than stubbed out.
                 message="@subs2dub",
             )
             out, out_sr = sf.read(dst, dtype="float32")
@@ -155,8 +145,6 @@ class VoiceConvertBackend:
             return audio
 
         sr = self.inner.sample_rate
-        # Characterise each base preset once. Synthesizing the calibration line
-        # unconditionally would double the render cost of the entire film.
         key = f"base:{preset}"
         if self.converter.has_se(key):
             src_se = self.converter.se_for_array(None, sr, key)
@@ -169,8 +157,6 @@ class VoiceConvertBackend:
         return out
 
 
-# A neutral line used once per preset to characterise the base voice. Content is
-# irrelevant beyond covering a decent spread of phonemes.
 _CALIBRATION = (
     "The quick brown fox jumps over the lazy dog while the sun sets behind them."
 )

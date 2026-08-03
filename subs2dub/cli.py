@@ -58,8 +58,6 @@ def slice_cues(cues: list[Cue], start: float, duration: float) -> list[Cue]:
     for c in cues:
         if c.end <= start or c.start >= end:
             continue
-        # A cue straddling the boundary would get an artificially short window
-        # and report a phantom overrun. Drop it rather than dub half a line.
         if c.start < start or c.end > end:
             kept = min(c.end, end) - max(c.start, start)
             if kept < 0.8 * c.window:
@@ -94,7 +92,7 @@ def work_dir_for(source: str, requested: str) -> Path:
     """
     base = Path(requested).expanduser()
     if base.name != "work" or base.parent != Path("."):
-        return base  # an explicit path is the caller's business
+        return base
     name = Path(source).stem if not srcmod.is_url(source) else source
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", name).strip("-").lower()[:40]
     digest = hashlib.sha1(source.encode()).hexdigest()[:8]
@@ -144,11 +142,10 @@ def _build(args: argparse.Namespace) -> int:
     source = video
     if clip_range:
         start, dur = clip_range
-        if fetched is None:
-            source = extract_clip(video, work / "clip.mkv", start, dur)
-        else:
-            # yt-dlp already trimmed the download to this range.
+        if fetched is not None and fetched.trimmed:
             dur = min(dur, probe_duration(video))
+        else:
+            source = extract_clip(video, work / "clip.mkv", start, dur)
         cues = slice_cues(cues, start, dur)
         total = dur
         print(f"clip mode: {start:.0f}s +{dur:.0f}s -> {len(cues)} cues")
@@ -197,7 +194,6 @@ def _build(args: argparse.Namespace) -> int:
         print(f"\nfound {len(mapping)} speakers")
         print(casting.describe(cues, mapping, f0))
 
-        # So the assignment can actually be checked by ear/eye and hand-fixed.
         cast_tsv = work / "cast.tsv"
         with cast_tsv.open("w") as fh:
             fh.write("idx\tstart\tspeaker\tvoice\ttext\n")
@@ -276,8 +272,6 @@ def _build(args: argparse.Namespace) -> int:
                 f"--target-lang {args.target_lang} needs a translation source: "
                 "--export-translation, --translations FILE, or --translate-local")
 
-    # Prosody must run before synthesis: it rewrites punctuation, which is the
-    # only lever Kokoro exposes on intonation.
     if not args.no_prosody and vocals is not None:
         from . import prosody
         from .diarize import to_mono16k
@@ -304,8 +298,6 @@ def _build(args: argparse.Namespace) -> int:
             print(f"applied {n} shortened lines from {rw}")
 
 
-    # Voice conversion: keep the base voice's native English, take only the
-    # actor's timbre. Wraps the backend so fitting and mixing are unchanged.
     if args.voice_convert:
         if vocals is None:
             raise SystemExit("--voice-convert needs the vocal stem; drop --no-separate")
@@ -324,10 +316,6 @@ def _build(args: argparse.Namespace) -> int:
         lead = max(clips, key=lambda s: sum(1 for x in cues if x.speaker == s))
         for c in cues:
             ref = clips.get(c.speaker or "", clips[lead])
-            # Preset backends (Kokoro) keep a per-speaker voice so pitch range
-            # roughly matches. Cloning backends used as a base get the empty
-            # string, meaning their built-in speaker: expression comes from
-            # them, identity comes from the converter.
             if presets:
                 preset = c.voice if c.voice in presets else args.voice
             else:
@@ -337,7 +325,6 @@ def _build(args: argparse.Namespace) -> int:
         print(f"voice conversion: {len(clips)} target voices, tau={args.convert_tau}")
         print(refsmod.describe(clips))
 
-    # Cloning backends want a reference clip per character rather than a preset.
     elif getattr(backend, "clones", False):
         if vocals is None:
             raise SystemExit(
@@ -354,7 +341,7 @@ def _build(args: argparse.Namespace) -> int:
         missing = 0
         for c in cues:
             ref = clips.get(c.speaker or "")
-            if ref is None:  # too few lines to cut a reference from
+            if ref is None:
                 ref = clips[max(clips, key=lambda s: sum(
                     1 for x in cues if x.speaker == s))]
                 missing += 1
@@ -402,8 +389,6 @@ def _build(args: argparse.Namespace) -> int:
     verify.record(cues, work / "render.json")
 
     dlg = write_dialogue_wav(bus, backend.sample_rate, work / "dialogue.wav")
-    # Synthesis is done; drop the model before muxing rather than holding a
-    # couple of gigabytes through work that needs none of it.
     closer = getattr(backend, "close", None)
     if closer:
         closer()
@@ -532,7 +517,6 @@ def main(argv: list[str] | None = None) -> int:
     w = sub.add_parser("wizard", help="interactive setup with a runtime estimate")
     w.set_defaults(func=lambda _a: wizard_run())
 
-    # Bare `subs2dub` is the interactive path; the flags are for scripting it.
     if not argv and len(sys.argv) == 1:
         return wizard_run()
 

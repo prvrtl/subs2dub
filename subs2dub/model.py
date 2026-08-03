@@ -22,28 +22,22 @@ class Cue:
     speaker: str | None = None
     voice: str | None = None
 
-    # Set by the fitter.
     audio: Path | None = None
     rendered_dur: float | None = None
     engine_speed: float = 1.0
     stretch: float = 1.0
     borrowed: float = 0.0
     overrun: float = 0.0
-    overlapped: float = 0.0  # seconds running under the following line
-    truncated: float = 0.0  # seconds of speech lost to the window
+    overlapped: float = 0.0
+    truncated: float = 0.0
 
-    # Set by the prosody pass, measured off the original actor's voice.
     gain_db: float = 0.0
-    f0_end_slope: float = 0.0  # semitones/sec over the tail of the line
-    intensity: float = 0.0  # dB relative to this speaker's own median
+    f0_end_slope: float = 0.0
+    intensity: float = 0.0
     punct_fixed: bool = False
-    # Emotion intensity for backends that accept one; 0.5 is neutral.
-    # Ignored by Kokoro, which has no such control.
     emotion: float = 0.5
-    # Eight-dimensional vector for IndexTTS-2; see emotion.DIMENSIONS.
     emo_vector: list[float] = field(default_factory=list)
 
-    # Set by the cue loader, for diagnostics and the adaptation pass.
     source_text: str = ""
     merged_from: list[int] = field(default_factory=list)
 

@@ -17,7 +17,6 @@ import pysubs2
 
 from .model import Cue
 
-# Whole-line non-dialogue markers.
 _BRACKETED = re.compile(r"^\s*[\[(][^\])]*[\])]\s*$")
 _MUSIC = re.compile(r"[♪♫#]")
 _CREDIT_JUNK = re.compile(
@@ -26,9 +25,7 @@ _CREDIT_JUNK = re.compile(
     re.I,
 )
 _TAGS = re.compile(r"<[^>]+>")
-# Inline SFX inside an otherwise-spoken line, e.g. "[SIGHS] I'm fine."
 _INLINE_SFX = re.compile(r"[\[(][^\])]{0,40}[\])]")
-# A leading speaker-name label: "JOHN: hello" / "MAN ON RADIO: hello"
 _SPEAKER_LABEL = re.compile(r"^\s*[A-Z][A-Z0-9 .'#\-]{1,24}:\s*")
 _DASH = re.compile(r"^\s*[-–—]\s*")
 
@@ -45,7 +42,7 @@ def _clean_line(line: str) -> str:
 def _is_dropped(text: str) -> bool:
     if not text or not re.search(r"[A-Za-z0-9]", text):
         return True
-    if _MUSIC.search(text):  # song lyrics: don't dub, and don't voice lyrics
+    if _MUSIC.search(text):
         return True
     if _CREDIT_JUNK.search(text):
         return True
@@ -91,7 +88,6 @@ def load(
         if len(parts) == 1:
             raw.append(Cue(idx=len(raw), start=start, end=end, text=parts[0]))
         else:
-            # Divide the window between speakers in proportion to text length.
             total = sum(len(p) for p in parts) or 1
             cursor = start
             for p in parts:
@@ -144,18 +140,11 @@ def _merge_fragments(
     return out
 
 
-# Characters a phonemizer will read aloud rather than treat as punctuation.
-# espeak-ng vocalizes stray quotes and leading dialogue dashes, which is heard
-# as the synthesizer literally speaking the punctuation.
 _QUOTES = str.maketrans("", "", '"“”«»‘’`')
 _LEAD_DASH = re.compile(r"^\s*[-–—]+\s*")
-# A dash used as punctuation: an em/en dash, or the "--" subtitles use for an
-# interruption. Single hyphens are left alone - Ukrainian and English both use
-# them inside words.
 _MID_DASH = re.compile(r"\s*(?:--+|[–—]+)\s*")
 _LEAD_COLON = re.compile(r"^\s*:\s*")
 _PUNCT_RUN = re.compile(r"[.,!?;:]{2,}")
-# Strongest mark in a run wins: a question survives an adjacent comma.
 _RANK = {"?": 4, "!": 3, ".": 2, ";": 1, ":": 1, ",": 0}
 
 
@@ -176,13 +165,13 @@ def speakable(text: str) -> str:
     t = _LEAD_DASH.sub("", text)
     t = t.translate(_QUOTES)
     t = t.replace("…", "...")
-    t = _MID_DASH.sub(", ", t)  # an em dash reads as a pause, not a word
+    t = _MID_DASH.sub(", ", t)
     t = _LEAD_COLON.sub("", t)
     t = re.sub(r"\s+([,.!?;:])", r"\1", t)
     t = _PUNCT_RUN.sub(lambda m: _collapse(m.group()), t)
     t = re.sub(r"\s+", " ", t).strip(" -–—:;,")
     if t and t[-1] not in ".!?":
-        t += "."  # a bare fragment otherwise gets no closing intonation
+        t += "."
     return t
 
 

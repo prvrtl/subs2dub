@@ -19,8 +19,8 @@ import numpy as np
 from .model import Cue
 
 EMBED_SR = 16_000
-_MIN_SEG = 0.45   # below this an embedding is too noisy to trust
-_WIN = 2.0        # sub-window length, seconds
+_MIN_SEG = 0.45
+_WIN = 2.0
 _EMB_DIM = 192
 
 
@@ -57,14 +57,14 @@ def _load_encoder(cache: Path):
     return EncoderClassifier.from_hparams(
         source="speechbrain/spkrec-ecapa-voxceleb",
         savedir=str(cache / "ecapa"),
-        run_opts={"device": "cpu"},  # these clips are too short for MPS to pay off
+        run_opts={"device": "cpu"},
     )
 
 
 def _windows(start: float, end: float) -> list[tuple[float, float]]:
     """Sub-windows to embed and average over."""
     dur = end - start
-    pad = min(0.10, dur * 0.15)  # edges bleed into the neighbouring speaker
+    pad = min(0.10, dur * 0.15)
     s, e = start + pad, end - pad
     if e - s <= 0:
         return []
@@ -109,8 +109,6 @@ def embed_cues(
         if progress and (i + 1) % 25 == 0:
             progress(i + 1, len(cues))
 
-    # Translation and synthesis follow and want the memory. Going out of scope
-    # is not enough: the allocator keeps freed blocks charged to the process.
     del encoder
     _release(torch)
 
@@ -257,7 +255,6 @@ def cluster_speakers(
         near = idx[np.argmin(np.abs(idx - i))]
         labels[i] = labels[near]
 
-    # Renumber so ids are contiguous and stable.
     remap = {old: new for new, old in enumerate(sorted(set(labels.tolist())))}
     return np.array([remap[v] for v in labels], dtype=int)
 

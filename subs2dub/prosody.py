@@ -22,7 +22,6 @@ import numpy as np
 
 from .model import Cue
 
-# Openers that make a line interrogative even when the subtitler dropped the '?'.
 _INTERROGATIVE = re.compile(
     r"^\s*(who|what|when|where|why|how|which|whose|whom|"
     r"is|are|was|were|do|does|did|can|could|will|would|should|shall|"
@@ -31,9 +30,9 @@ _INTERROGATIVE = re.compile(
 )
 _TAG_QUESTION = re.compile(r",\s*(right|okay|ok|yeah|no|isn't it|aren't you)\s*$", re.I)
 
-_RISE_SEMITONES = 2.0  # terminal rise that reads as a question
-_TAIL = 0.45  # seconds of the line used for the terminal contour
-_SHOUT_DB = 5.0  # dB above a speaker's median that counts as raised voice
+_RISE_SEMITONES = 2.0
+_TAIL = 0.45
+_SHOUT_DB = 5.0
 
 
 def _f0_track(seg: np.ndarray, sr: int) -> np.ndarray:
@@ -73,7 +72,6 @@ def analyze(cues: list[Cue], vocals_wav, progress=None) -> None:
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
 
-    # Pass 1: loudness of each line.
     rms = np.full(len(cues), np.nan, dtype=np.float64)
     for i, c in enumerate(cues):
         seg = audio[int(c.start * sr):int(c.end * sr)]
@@ -83,8 +81,6 @@ def analyze(cues: list[Cue], vocals_wav, progress=None) -> None:
         if r > 1e-5:
             rms[i] = 20.0 * np.log10(r)
 
-    # Relative to each speaker's own median, so a naturally quiet actor is not
-    # permanently turned down - what matters is deviation from their baseline.
     for spk in {c.speaker for c in cues}:
         idx = [i for i, c in enumerate(cues) if c.speaker == spk and np.isfinite(rms[i])]
         if len(idx) < 3:
@@ -93,7 +89,6 @@ def analyze(cues: list[Cue], vocals_wav, progress=None) -> None:
         for i in idx:
             cues[i].intensity = float(rms[i] - med)
 
-    # Pass 2: terminal pitch contour, only where it can change the punctuation.
     for i, c in enumerate(cues):
         text = c.text.rstrip()
         if text.endswith(("?", "!")):
@@ -116,9 +111,6 @@ def apply_punctuation(cues: list[Cue], use_pitch: bool = True) -> int:
         interrogative = bool(_INTERROGATIVE.match(text)) or bool(_TAG_QUESTION.search(text))
         rising = use_pitch and c.f0_end_slope >= _RISE_SEMITONES
 
-        # Require agreement between wording and delivery before overriding a
-        # full stop; intonation does not map identically across languages, so
-        # pitch alone would turn statements into questions.
         if interrogative and (rising or not text.endswith((".", ",", "...", "…"))):
             c.text = text.rstrip(".,") + "?"
             c.punct_fixed = True

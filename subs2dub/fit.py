@@ -39,23 +39,15 @@ from .tts import TTSBackend
 class FitConfig:
     max_engine_speed: float = 1.25
     max_stretch: float = 1.15
-    max_stretch_no_speed: float = 1.22  # backends without a rate parameter
-    max_stretch_emergency: float = 1.45  # rather than truncate a sentence
+    max_stretch_no_speed: float = 1.22
+    max_stretch_emergency: float = 1.45
     max_borrow: float = 1.50
-    borrow_guard: float = 0.12  # silence always left before the next cue
-    overrun_tolerance: float = 0.15  # ignore overruns smaller than this
-    # A speaker may run into the next line when the next line is someone else -
-    # people interrupt and overlap. Running into your own next line is just bad
-    # timing, so that stays forbidden.
+    borrow_guard: float = 0.12
+    overrun_tolerance: float = 0.15
     max_overlap_other: float = 0.45
-    duck_overlap_db: float = -3.5  # quieten the tail that overlaps
-    # A cue window is how long the original actor spoke. A dub that fills only
-    # part of it leaves the character silent while their mouth moves, which
-    # reads as choppy rather than as a pause.
+    duck_overlap_db: float = -3.5
     min_fill: float = 0.88
-    max_slowdown: float = 0.78  # rate < 1 lengthens; 0.78 is ~28% longer
-    # Synthesis fails occasionally: a line comes back as a fragment, or mostly
-    # silence. Those are drawn again rather than laid into the track.
+    max_slowdown: float = 0.78
     attempts: int = 3
 
 
@@ -118,7 +110,6 @@ def _cap(audio: np.ndarray, sr: int, seconds: float) -> np.ndarray:
     if limit <= 0 or audio.size <= limit:
         return audio
 
-    # Look back up to 250ms for a gap, in 10ms frames.
     frame = max(1, int(0.010 * sr))
     lookback = min(int(0.250 * sr), limit)
     cut = limit
@@ -171,8 +162,6 @@ def _fill(
     if dur <= 0 or dur >= target:
         return audio
 
-    # A clip far shorter than its text implies is a failed generation, not a
-    # short line. Stretching that would only draw out the damage.
     plausible = len(text) / 12.6 * 0.55
     if dur < plausible:
         return audio
@@ -207,8 +196,6 @@ def _synth_checked(
                 text, voice, speed=1.0, emotion=cue.emotion, attempt=attempt
             )
         except TypeError:
-            # Backends that predate the retry hook draw the same clip each time,
-            # so there is nothing to gain from asking twice.
             audio = backend.synth(text, voice, speed=1.0, emotion=cue.emotion)
             return audio
         if audio.size > best.size:
@@ -240,8 +227,6 @@ def fit_cue(
     """Synthesize `cue` and squeeze it toward its window. Returns the clip."""
     sr = backend.sample_rate
     voice = cue.voice or "af_heart"
-    # Normalize once here so every backend benefits and the render cache keys
-    # on what is actually spoken.
     text = speakable(cue.text)
 
     audio = _synth_checked(backend, text, voice, cue, cfg, report)
@@ -255,7 +240,6 @@ def fit_cue(
         report.clean += 1
         return audio
 
-    # 2. Borrow from the gap before the next cue, keeping a guard of silence.
     borrow = max(0.0, min(gap_after - cfg.borrow_guard, cfg.max_borrow))
     budget = window + borrow
     if dur <= budget:
@@ -263,7 +247,6 @@ def fit_cue(
         report.borrowed += 1
         return audio
 
-    # 3. Re-synthesize at a faster engine speed, where the backend can.
     supports_speed = getattr(backend, "supports_speed", True)
     if supports_speed:
         needed = dur / budget
@@ -281,13 +264,7 @@ def fit_cue(
             cue.borrowed = max(0.0, dur - window)
             return audio
 
-    # 4. Pitch-preserving time-stretch, hard-capped. When the backend has no
-    # rate control this is the only remaining lever, so it is allowed to work
-    # a little harder before giving up and reporting an overrun.
     cap = cfg.max_stretch if supports_speed else cfg.max_stretch_no_speed
-    # Anything still over its window gets truncated when the track is laid out,
-    # and losing the end of a sentence is worse than a stretch that wobbles a
-    # little. Past the normal cap, keep stretching rather than surrender words.
     if dur / budget > cap:
         cap = min(dur / budget, cfg.max_stretch_emergency)
     rate = min(dur / budget, cap)
@@ -326,8 +303,6 @@ def render_dialogue_track(
         try:
             clip = fit_cue(cue, backend, gaps[i], cfg, report)
         except Exception as exc:
-            # One line that refuses to synthesize should cost that line, not the
-            # whole render. It is left silent and listed at the end.
             report.failed.append((cue, str(exc).split("\n")[0][:120]))
             clip = np.zeros(0, dtype=np.float32)
         if clip.size:
@@ -338,9 +313,6 @@ def render_dialogue_track(
             free = cue.window + gaps[i] - cfg.borrow_guard
             room = free
             if nxt is not None and nxt.speaker and nxt.speaker != cue.speaker:
-                # Different character next: let the tail run into them a little.
-                # Conversation overlaps, and a slightly clipped word is more
-                # damaging than two voices briefly sharing the air.
                 room += cfg.max_overlap_other
             before = clip.size
             clip = _cap(clip, sr, room)

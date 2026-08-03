@@ -20,8 +20,6 @@ import json
 import sys
 import traceback
 
-# Model loading logs to stdout, which would corrupt the protocol. Keep a private
-# handle to the real stdout and send everything else to stderr.
 _CHANNEL = sys.stdout
 sys.stdout = sys.stderr
 
@@ -50,7 +48,7 @@ def _torchaudio_compat(torchaudio, torch) -> None:
             uri, dtype="float32", always_2d=True,
             start=frame_offset, frames=num_frames if num_frames > 0 else -1,
         )
-        waveform = torch.from_numpy(data)  # soundfile gives (frames, channels)
+        waveform = torch.from_numpy(data)
         return (waveform.T.contiguous() if channels_first else waveform), rate
 
     torchaudio.load = load
@@ -113,10 +111,8 @@ def main() -> int:
                 text=job["text"],
                 references=refs,
                 format="wav",
-                # A character's reference clip is reused for every line they
-                # speak; without this it is decoded and re-encoded each time.
                 use_memory_cache="on",
-                normalize=False,  # our own normalizer already ran
+                normalize=False,
                 temperature=float(job.get("temperature", 0.7)),
                 top_p=float(job.get("top_p", 0.7)),
                 repetition_penalty=float(job.get("repetition_penalty", 1.2)),

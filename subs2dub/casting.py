@@ -17,7 +17,6 @@ from collections import Counter
 
 from .model import Cue
 
-# Roughly ordered best-first within each group, per Kokoro's own voice grades.
 AM_F = ["af_heart", "af_bella", "af_nicole", "af_aoede", "af_kore",
         "af_sarah", "af_nova", "af_sky", "af_alloy", "af_jessica", "af_river"]
 AM_M = ["am_michael", "am_fenrir", "am_puck", "am_echo", "am_eric",
@@ -28,8 +27,6 @@ BR_M = ["bm_george", "bm_fable", "bm_lewis", "bm_daniel"]
 FEMALE_POOL = AM_F + BR_F
 MALE_POOL = AM_M + BR_M
 
-# Median F0 above this reads as female. Sits between typical male (85-155 Hz)
-# and female (165-255 Hz) speaking ranges.
 F0_SPLIT = 158.0
 
 
@@ -62,8 +59,6 @@ def cast(
 
     genders = {spk: gender_of(spk) for spk in order}
 
-    # Speakers with no usable pitch estimate alternate, so they at least differ
-    # from each other rather than all collapsing onto one voice.
     unknown = [s for s in order if genders[s] == "?"]
     for i, spk in enumerate(unknown):
         genders[spk] = "F" if i % 2 == 0 else "M"
@@ -73,8 +68,6 @@ def cast(
     mapping: dict[str, str] = {}
     for spk in order:
         pool = fem if genders[spk] == "F" else mal
-        # Small voice sets (Piper has five for Ukrainian) run out before the
-        # cast does; reuse in order rather than collapsing everyone onto one.
         if not pool:
             pool = list((pools or {}).get(genders[spk]) or
                         (FEMALE_POOL if genders[spk] == "F" else MALE_POOL))

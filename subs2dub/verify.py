@@ -20,11 +20,8 @@ import numpy as np
 
 from .model import Cue
 
-# Anything quieter than this counts as silence for gap and clipping checks.
 SILENCE = 0.006
-# A clip ending this loud was cut rather than finished.
 ABRUPT_END = 0.05
-# Stretching past this is audible as a wobble.
 HARSH_STRETCH = 1.30
 
 
@@ -33,7 +30,7 @@ class Problem:
     start: float
     kind: str
     detail: str
-    severity: str  # "bad" or "warn"
+    severity: str
 
     def __str__(self) -> str:
         mark = "!!" if self.severity == "bad" else " ~"
@@ -72,7 +69,6 @@ def check_clip(cue: Cue, audio: np.ndarray, sr: int) -> list[Problem]:
         return out
 
     if cue.truncated > 0.15:
-        # The audible fault: a sentence that stops rather than ends.
         level = _tail_level(audio, sr)
         severity = "bad" if level > ABRUPT_END else "warn"
         out.append(Problem(
@@ -86,8 +82,6 @@ def check_clip(cue: Cue, audio: np.ndarray, sr: int) -> list[Problem]:
             f"x{cue.stretch:.2f} - audible wobble", "warn",
         ))
 
-    # Speech that is far shorter or longer than its text implies usually means
-    # the synthesizer dropped words or rambled.
     expected = len(cue.text) / 12.6
     if expected > 0.4:
         if duration < expected * 0.45:
@@ -155,7 +149,6 @@ def check_track(
         if nxt is None:
             continue
         if nxt.speaker and nxt.speaker == cue.speaker:
-            # One character cannot talk over themselves; this is a layout fault.
             out.append(Problem(
                 cue.start, "self-overlap",
                 f"{cue.overlapped:.2f}s over the same speaker's next line", "bad",
@@ -166,7 +159,6 @@ def check_track(
                 f"{cue.overlapped:.2f}s under {nxt.speaker}", "warn",
             ))
 
-    # A stretch of dialogue that renders as silence means lines went missing.
     spoken = [c for c in cues if c.start < total]
     for i in range(len(spoken) - 1):
         a, b = spoken[i], spoken[i + 1]
@@ -176,7 +168,7 @@ def check_track(
             continue
         window = bus[gap_start:gap_end]
         if window.size and float(np.abs(window).max()) < SILENCE:
-            continue  # a real pause between lines is fine
+            continue
 
     return out
 

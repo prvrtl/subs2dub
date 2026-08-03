@@ -35,8 +35,6 @@ from pathlib import Path
 
 from .model import Cue
 
-# Rough character-count ratio relative to English, used to warn about overruns
-# before a long render rather than after it.
 EXPANSION = {"uk": 1.12, "ru": 1.10, "de": 1.15, "es": 1.20, "fr": 1.18, "pl": 1.10}
 
 MARIAN = {
@@ -58,8 +56,6 @@ def export_for_translation(
         for i, c in enumerate(cues):
             prev = " | ".join(x.text for x in cues[max(0, i - context):i])
             nxt = " | ".join(x.text for x in cues[i + 1:i + 1 + context])
-            # A budget keeps translations from overrunning their window; the
-            # translator can aim for it rather than discovering it later.
             budget = int(c.window * 15.0)
             w.writerow([
                 f"{c.start:.2f}", c.speaker or "", budget, prev, c.text, nxt, "",
@@ -116,10 +112,6 @@ def translate_local(
     return done
 
 
-# Characters of speech per second, used to turn a cue window into a character
-# budget. Measured from rendered Ukrainian rather than assumed; the earlier 15.0
-# was optimistic and handed the translator budgets the synthesizer could not
-# actually deliver.
 CHARS_PER_SEC = {"uk": 13.8}
 DEFAULT_CPS = 14.0
 
@@ -128,9 +120,6 @@ LANGUAGE = {
     "es": "Spanish", "pl": "Polish", "ru": "Russian",
 }
 
-# Letters and function words that exist in Russian but not Ukrainian. Small
-# en->uk models drift into Russian on a noticeable share of lines, and the drift
-# is easy to miss by eye, so it is checked rather than trusted.
 _RUSSIAN = re.compile(
     r"[ыэъЫЭЪ]|\b(что|это|этот|здесь|сегодня|очень|тебя|меня|вы|его|её|"
     r"если|когда|где|такой|один|нет|да|только|потому|чтобы)\b",
@@ -142,9 +131,6 @@ def looks_russian(text: str) -> bool:
     return bool(_RUSSIAN.search(text))
 
 
-# Fraction of the real budget asked for on the first pass. Models overshoot a
-# stated limit slightly, and asking for the exact figure means most lines come
-# back a few characters long and need a second round trip.
 SQUEEZE = 0.97
 
 
@@ -154,9 +140,6 @@ def budget_for(cue: Cue, target: str) -> int:
     return max(12, int(cue.budget * cps))
 
 
-# Constant for the whole run: the per-line budget goes in the user message, not
-# here. Any change to this text invalidates the server's cached prefix, which
-# costs about as much as generating the translation itself.
 _SYSTEM = """You translate film dialogue into {lang} for dubbing.
 {brief}
 Rules:
@@ -244,13 +227,12 @@ def unload(model: str, host: str = "http://localhost:11434") -> None:
         with urllib.request.urlopen(req, timeout=30):
             pass
     except Exception:
-        pass  # best effort: the idle timeout still frees it
+        pass
 
 
 def _clean(text: str) -> str:
     """Strip the wrapping a chat model adds even when told not to."""
     text = text.strip().strip('"“”«»').strip()
-    # Drop a leading "Translation:"-style label in any script.
     text = re.sub(r"^[^:\n]{0,24}:\s*(?=\S)", "", text, count=1)
     return text.split("\n")[0].strip()
 
@@ -278,16 +260,12 @@ def translate_llm(
     """
     chat = ENGINES[engine]
     lang = LANGUAGE.get(target, target)
-    # Constant for the whole run, so it stays inside the cached prefix.
     brief_text = _brief_block(brief)
 
     best: dict[int, str] = {}
     remaining = list(enumerate(cues))
 
     for round_no in range(max(1, attempts)):
-        # Models overshoot a stated limit slightly, and a line that comes back a
-        # few characters long costs a whole extra round trip. Ask for less than
-        # the window really holds, and less again each round.
         squeeze = SQUEEZE ** (round_no + 1)
         failed: list[tuple[int, Cue]] = []
 
@@ -329,7 +307,6 @@ def translate_llm(
             over.append(cue)
 
     if engine == "ollama":
-        # Synthesis starts next and wants the memory more than we do.
         unload(model, host)
     return done, over
 

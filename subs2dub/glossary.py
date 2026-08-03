@@ -23,8 +23,6 @@ from pathlib import Path
 
 from .model import Cue
 
-# Words that start a sentence are capitalized for grammar, not because they are
-# names, so candidates are taken from mid-sentence positions only.
 _WORD = re.compile(r"\b[A-Z][a-zA-Z'’\-]{2,}\b")
 _SENTENCE_START = re.compile(r"(?:^|[.!?]\s+)$")
 
@@ -51,8 +49,6 @@ def candidates(cues: list[Cue], top: int = 120) -> list[str]:
             if word in _COMMON or word.isupper():
                 continue
             counts[word] += 1
-    # A term used once is probably not worth pinning down; it is also the case
-    # that one-offs are where false positives collect.
     return [w for w, n in counts.most_common(top) if n >= 2]
 
 

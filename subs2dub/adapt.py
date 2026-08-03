@@ -19,7 +19,6 @@ from pathlib import Path
 
 from .model import Cue
 
-# Natural English speech, measured against Kokoro output rather than assumed.
 CHARS_PER_SEC = 15.0
 
 
@@ -42,7 +41,7 @@ def export_overruns(
                 int(budget * chars_per_sec),
                 len(c.text),
                 c.text,
-                "",  # filled in by the rewriting pass
+                "",
             ])
     return path
 

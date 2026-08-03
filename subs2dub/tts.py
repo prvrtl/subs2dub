@@ -30,10 +30,7 @@ import soundfile as sf
 class TTSBackend(Protocol):
     sample_rate: int
     max_speed: float
-    # Engines that cannot re-articulate at a requested rate force the fitter to
-    # reach for time-stretching earlier. Kokoro can; Chatterbox cannot.
     supports_speed: bool
-    # Whether `voice` names a preset or points at a reference clip to clone.
     clones: bool
 
     def voices(self) -> list[str]: ...
@@ -47,8 +44,6 @@ class TTSBackend(Protocol):
     ) -> np.ndarray: ...
 
 
-# Kokoro ships ~28 English voices. Prefix encodes accent+gender:
-#   a=American, b=British / f=female, m=male
 KOKORO_VOICES = [
     "af_heart", "af_bella", "af_nicole", "af_aoede", "af_kore", "af_sarah",
     "af_nova", "af_sky", "af_alloy", "af_jessica", "af_river",
@@ -67,7 +62,7 @@ class KokoroTTS:
     """Local Kokoro-82M. Fast enough to re-render the whole film while tuning."""
 
     sample_rate = 24_000
-    max_speed = 1.25  # beyond this Kokoro starts to sound clipped
+    max_speed = 1.25
     supports_speed = True
     clones = False
 
@@ -81,7 +76,6 @@ class KokoroTTS:
         return list(KOKORO_VOICES)
 
     def _pipeline(self, voice: str):
-        # Voice prefix selects the G2P language pack: 'a' American, 'b' British.
         lang = voice[0]
         if lang not in self._pipelines:
             from kokoro import KPipeline
@@ -102,7 +96,7 @@ class KokoroTTS:
     def synth(
         self, text: str, voice: str, speed: float = 1.0, emotion: float = 0.5
     ) -> np.ndarray:
-        del emotion  # Kokoro exposes no emotion control; prosody.py compensates
+        del emotion
         cached = self._cache_path(text, voice, speed)
         if cached and cached.exists():
             audio, _ = sf.read(cached, dtype="float32")
@@ -120,7 +114,6 @@ class KokoroTTS:
         audio = _trim_silence(audio, self.sample_rate)
 
         if cached is not None:
-            # 16-bit keeps the on-disk cache ~215 MB for a feature instead of 430.
             sf.write(cached, audio, self.sample_rate, subtype="PCM_16")
         return audio
 
@@ -167,7 +160,7 @@ class ChatterboxTTS:
             cache_dir.mkdir(parents=True, exist_ok=True)
 
     def voices(self) -> list[str]:
-        return []  # cloned per speaker; see refs.py
+        return []
 
     def _load(self):
         if self._model is None:
@@ -195,17 +188,13 @@ class ChatterboxTTS:
     def synth(
         self, text: str, voice: str, speed: float = 1.0, emotion: float = 0.5
     ) -> np.ndarray:
-        del speed  # no rate control; the fitter compensates by stretching
+        del speed
         cached = self._cache_path(text, voice, emotion)
         if cached and cached.exists():
             audio, _ = sf.read(cached, dtype="float32")
             return audio
 
         model = self._load()
-        # An empty voice means "use the built-in speaker". That matters when
-        # Chatterbox is the *base* for voice conversion: cloning a foreign-language
-        # reference here would bake the accent in before the converter ever
-        # runs, which is exactly what we are trying to avoid.
         kwargs = {"audio_prompt_path": str(voice)} if voice else {}
         wav = model.generate(
             text, exaggeration=float(emotion), cfg_weight=0.5, **kwargs
@@ -218,8 +207,6 @@ class ChatterboxTTS:
         return audio
 
 
-# Piper voices, by language. Gender is needed for casting and is not derivable
-# from the voice name, so it is recorded here.
 PIPER_VOICES: dict[str, dict[str, tuple[str, str]]] = {
     "uk": {
         "tetiana": ("uk_UA-tetiana-high", "F"),
@@ -240,7 +227,7 @@ class PiperTTS:
     recovers most of the character it lacks on its own.
     """
 
-    sample_rate = 22_050  # replaced by the model's own rate once loaded
+    sample_rate = 22_050
     max_speed = 1.30
     supports_speed = True
     clones = False
@@ -300,7 +287,7 @@ class PiperTTS:
     def synth(
         self, text: str, voice: str, speed: float = 1.0, emotion: float = 0.5
     ) -> np.ndarray:
-        del emotion  # Piper has no emotion control
+        del emotion
         cached = self._cache_path(text, voice, speed)
         if cached and cached.exists():
             audio, _ = sf.read(cached, dtype="float32")
@@ -309,7 +296,6 @@ class PiperTTS:
         from piper import SynthesisConfig
 
         v = self._voice(voice)
-        # length_scale stretches duration, so it is the reciprocal of speed.
         cfg = SynthesisConfig(length_scale=1.0 / max(speed, 1e-3))
 
         parts = []
@@ -328,8 +314,6 @@ class PiperTTS:
         return audio
 
 
-# Ukrainian speech, measured from rendered output, and the factor beyond it that
-# marks a clip as runaway rather than merely slow.
 CHARS_PER_SEC = 12.6
 RUNAWAY = 2.5
 
@@ -348,9 +332,6 @@ class WorkerError(RuntimeError):
     """A synthesis worker failed on one line and may need restarting."""
 
 
-# Longest pause kept inside a line. Speech has real pauses - after a comma, or
-# for effect - but an in-context model asked for one short line will happily
-# emit seconds of nothing, which reads as the character having stopped talking.
 MAX_PAUSE = 0.22
 
 
@@ -387,8 +368,6 @@ def compress_pauses(
         while j < len(quiet) and quiet[j]:
             j += 1
         run = j - i
-        # Leading and trailing silence is handled by the caller's trim; only
-        # pauses with speech on both sides are shortened here.
         if i > 0 and j < len(quiet) and run > keep_frames:
             half = keep_frames // 2
             keep[i + half:j - (keep_frames - half)] = False
@@ -414,7 +393,7 @@ class FishSpeechTTS:
     than with a backend that can re-articulate faster.
     """
 
-    sample_rate = 44_100  # corrected from the first reply
+    sample_rate = 44_100
     max_speed = 1.0
     supports_speed = False
     clones = True
@@ -443,7 +422,7 @@ class FishSpeechTTS:
             cache_dir.mkdir(parents=True, exist_ok=True)
 
     def voices(self) -> list[str]:
-        return []  # cloned per speaker from reference clips
+        return []
 
     def _start(self):
         if self._proc is not None:
@@ -522,7 +501,7 @@ class FishSpeechTTS:
                                f"{getattr(self._log, 'name', 'the worker log')}",
                     }
                 continue
-            if line is None:  # the pipe closed
+            if line is None:
                 return {"ok": False, "err": "worker closed its output"}
             line = line.strip()
             if not line:
@@ -530,14 +509,12 @@ class FishSpeechTTS:
             try:
                 return json.loads(line)
             except ValueError:
-                continue  # library output that escaped the redirect
+                continue
 
     def _cache_path(self, text: str, voice: str, attempt: int = 0) -> Path | None:
         if not self.cache_dir:
             return None
         who = Path(voice).name if voice else "default"
-        # The attempt number is part of the key so a redraw is a genuinely new
-        # sample rather than the cached clip that was already rejected.
         key = hashlib.sha1(
             f"fish|{who}|{self.temperature:.2f}|{attempt}|{text}".encode()
         ).hexdigest()[:20]
@@ -547,25 +524,18 @@ class FishSpeechTTS:
         self, text: str, voice: str, speed: float = 1.0, emotion: float = 0.5,
         attempt: int = 0,
     ) -> np.ndarray:
-        del speed, emotion  # no rate or emotion parameters
+        del speed, emotion
         cached = self._cache_path(text, voice, attempt)
         if cached and cached.exists():
             audio, sr = sf.read(cached, dtype="float32")
             self.sample_rate = sr
-            # Applied on read as well as on generation, so clips cached before
-            # this existed are cleaned up too. Compressing twice is a no-op.
             return compress_pauses(audio, sr)
 
         audio = self._generate(
             text, voice, self.temperature + 0.12 * attempt, cached
         )
-        # An autoregressive decoder sometimes fails to stop. Capping generation
-        # upstream destabilises it, so judge the output instead and redraw at a
-        # lower temperature.
         if audio.size / self.sample_rate > RUNAWAY * len(text) / CHARS_PER_SEC:
             second = self._generate(text, voice, 0.3, cached)
-            # Keep whichever is shorter: the retry can ramble too, and taking it
-            # blindly leaves the runaway in place.
             if second.size and second.size < audio.size:
                 audio = second
             elif cached:
@@ -579,9 +549,6 @@ class FishSpeechTTS:
         try:
             return self._request(text, voice, temperature, cached)
         except WorkerError:
-            # A feature-length render is hours of work, so one bad line must not
-            # end it. Restart and retry; the caller drops the line if it fails
-            # again.
             if restarts <= 0:
                 raise
             self.close()
@@ -595,8 +562,6 @@ class FishSpeechTTS:
 
         proc = self._start()
         out = cached or Path(tempfile.mktemp(suffix=".wav"))
-        # The worker runs in the Fish Speech checkout, so every path crossing
-        # the pipe has to be absolute - a relative one resolves against its cwd.
         job = {
             "text": text,
             "out": str(out.resolve()),
@@ -605,8 +570,6 @@ class FishSpeechTTS:
         if voice:
             ref = Path(voice).resolve()
             job["ref_audio"] = str(ref)
-            # Telling the model what the reference clip says lets it align text
-            # to voice instead of guessing, which noticeably steadies the clone.
             lab = ref.with_suffix(".lab")
             if lab.exists():
                 job["ref_text"] = lab.read_text(encoding="utf-8").strip()
@@ -738,7 +701,7 @@ class _WorkerBackend:
                                f"{getattr(self._log, 'name', 'the worker log')}",
                     }
                 continue
-            if line is None:  # the pipe closed
+            if line is None:
                 return {"ok": False, "err": "worker closed its output"}
             line = line.strip()
             if not line:
@@ -746,7 +709,7 @@ class _WorkerBackend:
             try:
                 return json.loads(line)
             except ValueError:
-                continue  # library output that escaped the redirect
+                continue
 
     def _job(self, job: dict, restarts: int = 1) -> dict:
         import json
@@ -803,7 +766,7 @@ class StyleTTS2(_WorkerBackend):
     """
 
     sample_rate = 24_000
-    max_speed = 1.30  # the model's own limit; past this it distorts
+    max_speed = 1.30
     supports_speed = True
     clones = True
 
@@ -828,13 +791,13 @@ class StyleTTS2(_WorkerBackend):
         }
 
     def voices(self) -> list[str]:
-        return []  # cloned per speaker from reference clips
+        return []
 
     def synth(
         self, text: str, voice: str, speed: float = 1.0, emotion: float = 0.5,
         attempt: int = 0,
     ) -> np.ndarray:
-        del emotion  # delivery comes from the reference clip's style vector
+        del emotion
         speed = float(min(max(speed, 0.7), self.max_speed))
         cached = self._cache_path(f"{speed:.3f}|{text}", voice, attempt)
         if cached and cached.exists():

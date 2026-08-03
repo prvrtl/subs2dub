@@ -25,7 +25,6 @@ from rich.progress import (
 from rich.table import Table
 from rich.text import Text
 
-# How each fitting outcome is shown in the recent-lines list.
 MARKS = {
     "clean": ("ok", "green"),
     "borrowed": ("borrowed", "green"),
@@ -118,10 +117,7 @@ class Reporter:
             self.live.update(self._render())
 
     def _render(self):
-        # Every row has to fit on one terminal line. A row that wraps makes the
-        # panel taller than the frame Live is repainting, and the leftovers end
-        # up strewn across the scrollback.
-        fixed = len("000.0s") + 4 + 11 + 8  # time, speaker, outcome, padding
+        fixed = len("000.0s") + 4 + 11 + 8
         room = max(20, self.console.width - fixed)
 
         table = Table.grid(padding=(0, 1))

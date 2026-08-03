@@ -62,8 +62,6 @@ def main() -> int:
 
     _emit({"ready": True, "device": device, "rate": rate})
 
-    # Mirrors the reference implementation's text preparation: the model reads
-    # IPA with stress marks, not raw Cyrillic.
     dashes = re.compile(r"[᠆‐‑‒–—―⁻₋−⸺⸻]")
 
     def prepare(text: str) -> str:

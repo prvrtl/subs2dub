@@ -15,21 +15,20 @@ from pathlib import Path
 
 CACHE = Path.home() / ".cache" / "subs2dub" / "timings.json"
 
-# Seconds per unit of work. The unit differs by stage and is named in UNITS.
 DEFAULTS = {
-    "separate": 0.12,          # per second of source audio
-    "diarize": 0.55,           # per cue
-    "translate_llm": 4.0,      # per cue
-    "translate_marian": 0.30,  # per cue
-    "references": 0.05,        # per cue
-    "prosody": 0.02,           # per cue
-    "synth_styletts2": 0.60,   # per second of speech produced
+    "separate": 0.12,
+    "diarize": 0.55,
+    "translate_llm": 4.0,
+    "translate_marian": 0.30,
+    "references": 0.05,
+    "prosody": 0.02,
+    "synth_styletts2": 0.60,
     "synth_fish": 3.50,
     "synth_chatterbox": 1.20,
     "synth_kokoro": 0.15,
     "synth_piper": 0.05,
-    "convert": 2.50,           # per second of speech, CPU-bound
-    "mux": 0.03,               # per second of video
+    "convert": 2.50,
+    "mux": 0.03,
 }
 
 UNITS = {
@@ -64,7 +63,6 @@ LABELS = {
     "mux": "Mux output",
 }
 
-# One-off costs that do not scale with the work, mostly loading weights.
 STARTUP = {
     "separate": 12.0,
     "diarize": 8.0,

@@ -20,12 +20,15 @@ from pathlib import Path
 
 _URL = re.compile(r"^https?://", re.I)
 
-# The host's own licence field, where one exists. Treat it as a hint only: it
-# records what the uploader ticked, not the rights position of the underlying
-# work. Blender's Sintel is CC-BY 3.0 by its creator yet reports "standard" on
-# YouTube, and material tagged creativeCommons is regularly re-uploaded by people
-# who do not hold the rights. Neither value is evidence on its own.
 _OPEN = {"creativeCommons", "cc-by"}
+
+
+def _worth_ranging(section: tuple[float, float], duration: float) -> bool:
+    """Only fetch a range when it saves a worthwhile amount of downloading."""
+    if duration <= 0:
+        return False
+    start, dur = section
+    return duration > 600 and (start + dur) < duration * 0.9 and dur < duration / 3
 
 
 def is_url(s: str) -> bool:
@@ -39,6 +42,7 @@ class Source:
     title: str = ""
     license: str = ""
     auto_captions: bool = False
+    trimmed: bool = False
     languages: list[str] = field(default_factory=list)
 
     @property
@@ -86,9 +90,6 @@ def fetch(
     work.mkdir(parents=True, exist_ok=True)
     info = probe(url)
 
-    # Whatever a previous run left here is not this video. The download is found
-    # afterwards by globbing, so a stale source.mkv or source.en.srt would be
-    # picked up instead and the wrong film would be dubbed.
     for old in list(work.glob("source.*")) + list(work.glob("source*.srt")):
         old.unlink(missing_ok=True)
 
@@ -98,7 +99,6 @@ def fetch(
     def pick(available: set[str]) -> str | None:
         if sub_lang in available:
             return sub_lang
-        # Accept regional variants, e.g. en-GB when en was asked for.
         for code in sorted(available):
             if code.split("-")[0] == sub_lang:
                 return code
@@ -128,19 +128,33 @@ def fetch(
         "--sub-langs", chosen, "--convert-subs", "srt",
         "-o", str(out), url,
     ]
-    if section:
-        # Fetch only the range being dubbed. On a multi-hour source this is the
-        # difference between a few megabytes and several gigabytes. Subtitles
-        # still arrive complete, with times relative to the full video, so the
-        # caller must rebase cues onto the trimmed clip.
+    duration = float(info.get("duration") or 0)
+    ranged = bool(section) and _worth_ranging(section, duration)
+    trimmed = False
+
+    if ranged:
         start, dur = section
-        cmd[1:1] = [
-            "--download-sections", f"*{start:.2f}-{start + dur:.2f}",
-            "--force-keyframes-at-cuts",
-        ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise SystemExit(f"download failed\n{proc.stderr.strip()[-400:]}")
+        proc = subprocess.run(
+            cmd[:1] + [
+                "--download-sections", f"*{start:.2f}-{start + dur:.2f}",
+                "--force-keyframes-at-cuts",
+            ] + cmd[1:],
+            capture_output=True, text=True,
+        )
+        trimmed = proc.returncode == 0
+        if not trimmed:
+            print("  ranged download refused by the host; fetching the whole "
+                  "video instead")
+            for stale in list(work.glob("source.*")):
+                stale.unlink(missing_ok=True)
+
+    if not trimmed:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise SystemExit(
+                f"download failed\n{proc.stderr.strip()[-400:]}\n\n"
+                f"  if this is a 403, try: {_yt_dlp()} -U"
+            )
 
     video = next(iter(sorted(work.glob("source.mkv"))), None) or next(
         iter(sorted(work.glob("source.*"))), None
@@ -150,7 +164,7 @@ def fetch(
         raise SystemExit("download produced no video file")
 
     return Source(
-        video=video, subs=subs,
+        video=video, subs=subs, trimmed=trimmed,
         title=info.get("title", ""),
         license=info.get("license", "") or "",
         auto_captions=is_auto,

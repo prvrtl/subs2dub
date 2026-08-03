@@ -24,8 +24,6 @@ def write_dialogue_wav(bus: np.ndarray, sr: int, path: Path) -> Path:
     return path
 
 
-# ISO 639-2/B codes and display names for tagging the dub track. Players show
-# these, so a Ukrainian dub labelled "eng" is actively misleading.
 LANGS = {
     "en": ("eng", "English"), "uk": ("ukr", "Ukrainian"),
     "de": ("deu", "German"),  "fr": ("fra", "French"),
@@ -73,7 +71,6 @@ def mux(
     """
     code, name = LANGS.get(lang, ("und", lang.upper()))
 
-    # sidechaincompress ratio approximating the requested gain reduction.
     ratio = max(2.0, min(20.0, duck_db if bed is None else duck_db * 0.55))
     bg_src = "[2:a]" if bed else f"[0:a:{audio_stream}]"
     voices_idx = 3 if bed else 2
@@ -85,7 +82,6 @@ def mux(
         "[1:a]aformat=sample_fmts=fltp:sample_rates=48000:"
         f"channel_layouts=stereo,volume={dialogue_gain_db}dB[dlg]",
     ]
-    # The dub keys every duck, so it needs one copy per ducked source.
     chain.append(
         "[dlg]asplit=3[dlgmix][key][key2]" if use_voices
         else "[dlg]asplit=2[dlgmix][key]"
@@ -100,9 +96,6 @@ def mux(
         chain += [
             f"[{voices_idx}:a]aformat=sample_fmts=fltp:sample_rates=48000:"
             f"channel_layouts=stereo,volume={voices_db}dB[orig]",
-            # Faster attack and slower release than the bed: the original voice
-            # must get out of the way the instant the dub starts, and stay out
-            # until it finishes a phrase.
             f"[orig][key2]sidechaincompress=threshold=0.02:ratio={vratio}:"
             "attack=5:release=500:makeup=1[origducked]",
             "[ducked][origducked]amix=inputs=2:duration=first:normalize=0[beds]",

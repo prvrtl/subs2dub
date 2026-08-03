@@ -20,8 +20,8 @@ from .model import Cue
 
 TARGET_SECONDS = 12.0
 MIN_SECONDS = 4.0
-_MIN_CUE = 1.0  # shorter cues carry too little voice to be worth splicing
-_GAP = 0.25  # silence between spliced pieces
+_MIN_CUE = 1.0
+_GAP = 0.25
 
 
 def _join(pieces: list[np.ndarray], sr: int, fade: float = 0.02) -> np.ndarray:
@@ -69,7 +69,6 @@ def build_references(
             rms = float(np.sqrt(np.mean(seg.astype(np.float64) ** 2)))
             if rms < 1e-4:
                 continue
-            # Favour loud, long lines - both correlate with clean solo speech.
             scored.append((rms * min(seg.size / sr, 6.0), seg, c))
 
         if not scored:
@@ -86,9 +85,6 @@ def build_references(
         if total < MIN_SECONDS:
             continue
 
-        # Butt the pieces together with a short crossfade rather than padding
-        # them apart. An in-context model treats the reference as an example of
-        # how this character talks, so inserted gaps teach it to leave gaps.
         joined = _join(pieces, sr)
         peak = float(np.max(np.abs(joined)) or 0)
         if peak > 0:
@@ -96,9 +92,6 @@ def build_references(
 
         path = out_dir / f"{spk}.wav"
         sf.write(path, joined, sr, subtype="PCM_16")
-        # Transcript sidecar, named the way Fish Speech expects. Backends that
-        # want to know what the reference says clone more accurately with it;
-        # the rest ignore the file.
         path.with_suffix(".lab").write_text(
             " ".join(t for t in spoken if t).strip(), encoding="utf-8"
         )

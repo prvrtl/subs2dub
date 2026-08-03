@@ -69,7 +69,6 @@ def separate(
 
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0 and dev == "mps":
-        # MPS falls over on some kernels; CPU is slower but always works.
         shutil.rmtree(out_dir, ignore_errors=True)
         cmd[cmd.index("-d") + 1] = "cpu"
         proc = subprocess.run(cmd, capture_output=True, text=True)
