@@ -279,10 +279,10 @@ def _build(args: argparse.Namespace) -> int:
 
     if not args.no_prosody and vocals is not None:
         from . import prosody
-        from .diarize import to_mono16k
+        from .diarize import _current, to_mono16k
 
-        vw = work / "vocals16k.wav"
-        if not vw.exists():
+        vw = vocals.with_name("vocals16k.wav")
+        if not _current(vw, vocals):
             to_mono16k(vocals, vw)
 
         def pprog(done: int, n: int) -> None:

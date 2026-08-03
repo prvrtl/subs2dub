@@ -24,6 +24,20 @@ _WIN = 2.0
 _EMB_DIM = 192
 
 
+def _current(derived: Path, source: Path) -> bool:
+    """Whether a cached conversion still matches the file it came from.
+
+    Caching by filename alone silently reuses another run's audio: a clip
+    render leaves a short stem behind, and the next full render embeds
+    against it, so every cue past the clip gets no audio at all.
+    """
+    try:
+        return (derived.exists()
+                and derived.stat().st_mtime >= source.stat().st_mtime)
+    except OSError:
+        return False
+
+
 def extract_audio(video: Path, out: Path, stream: int = 0) -> Path:
     """Mono 16 kHz WAV - what the embedder wants."""
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -310,12 +324,12 @@ def diarize(
     what produced the six-speakers-for-two-people failure.
     """
     if vocals is not None:
-        wav = work / "vocals16k.wav"
-        if not wav.exists():
+        wav = vocals.with_name("vocals16k.wav")
+        if not _current(wav, vocals):
             to_mono16k(vocals, wav)
     else:
-        wav = work / "orig16k.wav"
-        if not wav.exists():
+        wav = work / f"{video.stem}-{audio_stream}-16k.wav"
+        if not _current(wav, video):
             extract_audio(video, wav, audio_stream)
 
     embs, valid = embed_cues(cues, wav, work / "models", progress=progress)
