@@ -175,8 +175,8 @@ def apply_gain(cues: list[Cue], max_db: float = 5.0, scale: float = 0.6) -> None
 
 
 def apply_emotion(
-    cues: list[Cue], base: float = 0.5, scale: float = 0.045,
-    lo: float = 0.25, hi: float = 1.10,
+    cues: list[Cue], base: float = 0.72, scale: float = 0.022,
+    lo: float = 0.55, hi: float = 0.95,
 ) -> None:
     """Turn measured intensity into an emotion setting for capable backends.
 
@@ -184,14 +184,22 @@ def apply_emotion(
     arousal: a line delivered well above their norm is usually shouted, urgent
     or frightened. Exclamations get a further nudge, questions a slight one.
     Backends without an emotion control ignore this entirely.
+
+    The band is narrow and sits high deliberately. Measured on Chatterbox,
+    expressive range peaks around 0.8 and collapses above 1.0, so the old
+    ceiling of 1.10 reached into a region where delivery becomes erratic. The
+    setting also raises pitch steeply - roughly an octave from 0.2 to 0.8 - so
+    a wide swing driven by loudness would change a character's voice from line
+    to line. Staying inside 0.55 to 0.95 keeps the delivery lively without the
+    identity drifting.
     """
     for c in cues:
         v = base + c.intensity * scale
         tail = c.text.rstrip()[-1:]
         if tail == "!":
-            v += 0.12
+            v += 0.06
         elif tail == "?":
-            v += 0.04
+            v += 0.02
         c.emotion = float(np.clip(v, lo, hi))
 
 

@@ -37,6 +37,28 @@ class Problem:
         return f"{mark} {self.start:7.1f}s  {self.kind:<16} {self.detail}"
 
 
+def previous_text(path: Path) -> dict[str, str]:
+    """Text from an earlier render, keyed by start time.
+
+    Translation is the longest stage in the pipeline and the one a casting fix
+    has no reason to repeat: the lines are unchanged, only who says them.
+    """
+    try:
+        rows = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    out: dict[str, str] = {}
+    for row in rows:
+        try:
+            start = row["start"]
+            text = row["text"]
+        except (KeyError, TypeError):
+            continue
+        if text:
+            out[f"{float(start):.2f}"] = text
+    return out
+
+
 def record(cues: list[Cue], path: Path) -> Path:
     """Persist what the fitter did to each cue, so a render can be re-examined."""
     path.parent.mkdir(parents=True, exist_ok=True)

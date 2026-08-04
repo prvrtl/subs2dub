@@ -2,11 +2,17 @@ import sys
 
 from .cli import main
 
-try:
-    sys.exit(main())
-except KeyboardInterrupt:
-    print("\nstopped.", file=sys.stderr)
-    sys.exit(130)
-except EOFError:
-    print(file=sys.stderr)
-    sys.exit(130)
+
+def run() -> int:
+    try:
+        return main()
+    except KeyboardInterrupt:
+        print("\nstopped.", file=sys.stderr)
+        return 130
+    except EOFError:
+        print(file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(run())

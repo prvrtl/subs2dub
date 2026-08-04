@@ -13,6 +13,7 @@ from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 
 from . import estimate
+from . import review
 from .source import is_url
 
 CUES_PER_MINUTE = 11.0
@@ -27,25 +28,16 @@ class Choice:
 
 
 BACKENDS = [
-    Choice("styletts2", "StyleTTS2 (Ukrainian)",
-           "Clones each actor. Real speed control, and it cannot stall or "
-           "run on. Renders faster than the audio plays.",
-           "needs the styletts2-ukrainian checkout"),
     Choice("chatterbox", "Chatterbox (English)",
            "Clones each actor, expressive delivery."),
     Choice("kokoro", "Kokoro (English)",
            "28 preset voices, very fast."),
-    Choice("fish", "Fish Speech 1.5 (Ukrainian)",
-           "Clones each actor at 44.1 kHz. Slower, and prone to long pauses.",
-           "non-commercial licence; needs a separate checkout"),
     Choice("piper", "Piper (many languages)",
            "Preset voices, fastest of all.",
            "noticeably more synthetic than the others"),
 ]
 
 BACKEND_LANGS = {
-    "styletts2": {"uk"},
-    "fish": {"uk"},
     "kokoro": {"en"},
     "chatterbox": {"en"},
     "piper": None,
@@ -252,13 +244,73 @@ def run(argv: list[str] | None = None) -> int:
         console.print("[dim]Nothing was run.[/dim]")
         return 0
 
+    preview = None
+    if whole and duration:
+        preview = review.preview_range(duration)
+
     args = _to_args(
         target, out, backend, target_lang, sub_lang, translator,
         separate, diarize, None if whole else (start, length), originals,
     )
     from .cli import cmd_build
 
-    return cmd_build(args)
+    if preview is None:
+        return cmd_build(args)
+    return _preview_then_render(console, args, preview, out, plan)
+
+
+def _preview_then_render(console, args, preview, out, plan) -> int:
+    """Render a minute, let it be judged, and only then commit to the film.
+
+    A feature takes hours, and every question worth asking about a dub - the
+    casting, the voices, how present the original should be - can only be
+    answered by listening. Getting that wrong after the full render is the
+    expensive mistake this avoids.
+    """
+    import copy
+
+    from . import estimate as est
+    from . import review
+    from .cli import cmd_build
+
+    start, length = preview
+    mix = review.Mix(
+        duck=args.duck, original_voices=args.original_voices,
+        dialogue_gain=args.dialogue_gain,
+        keep_originals=not args.no_original_voices,
+    )
+
+    while True:
+        trial = copy.deepcopy(args)
+        trial.clip = f"{start:.0f}:{length:.0f}"
+        trial.out = str(Path(out).with_suffix("")) + ".preview.mkv"
+        trial.duck = mix.duck
+        trial.original_voices = mix.original_voices
+        trial.dialogue_gain = mix.dialogue_gain
+        console.print(
+            f"\n[bold]Rendering a {length:.0f}-second preview[/bold] "
+            f"[dim]from {start / 60:.0f} min in[/dim]"
+        )
+        code = cmd_build(trial)
+        if code != 0:
+            return code
+
+        action, mix = review.decide(console, Path(trial.out), mix)
+        if action == "quit":
+            return 0
+        if action == "remix":
+            continue
+        if action == "cast":
+            work = Path(trial.work) if hasattr(trial, "work") else Path("./work")
+            review.cast_instructions(console, work / "cast.tsv")
+            return 0
+
+        args.duck = mix.duck
+        args.original_voices = mix.original_voices
+        args.dialogue_gain = mix.dialogue_gain
+        if not review.confirm_full(console, est.human(est.total(plan))):
+            return 0
+        return cmd_build(args)
 
 
 def _stages(backend: str, translator: str, separate: bool, diarize: bool) -> list[str]:
@@ -283,26 +335,28 @@ def _to_args(
     translator: str, separate: bool, diarize: bool,
     clip: tuple[float, float] | None, originals: float | None,
 ) -> argparse.Namespace:
-    return argparse.Namespace(
-        video=target, out=out, subs=None, sub_stream=0, work="./work",
-        backend=backend, voice="af_heart", no_diarize=not diarize,
-        speakers=None, max_speakers=20, merge_sim=0.55, audio_stream=0,
-        no_separate=not separate, shifts=0,
-        clip=f"{clip[0]:.0f}:{clip[1]:.0f}" if clip else None,
-        merge_gap=0.30, max_speed=1.25, max_stretch=1.15, max_borrow=1.50,
-        duck=9.0, dialogue_gain=2.0, drop_original=False, report_n=8,
-        rewrites=None, target_lang=target_lang,
-        translate_llm=translator in ("llm", "claude"),
-        llm_engine="claude" if translator == "claude" else "ollama",
-        llm_model="sonnet" if translator == "claude" else "gemma3:12b",
-        llm_host="http://localhost:11434", llm_batch=10, no_context=False,
-        translate_local=translator == "marian",
-        export_translation=translator == "export",
-        translations=None, sub_lang=sub_lang, no_auto_captions=False,
-        max_height=0, voice_convert=False,
-        ov_ckpt="./checkpoints_ov/converter", convert_tau=0.3,
-        no_prosody=False, no_pitch_questions=False, max_gain=5.0,
-        no_caffeinate=False,
-        original_voices=originals if originals is not None else -16.0,
-        no_original_voices=originals is None,
-    )
+    """Start from the parser's own defaults and override only what was asked.
+
+    Restating every flag here meant a flag added to the parser was simply
+    absent on the interactive path, and the run died partway through with an
+    AttributeError after the expensive stages had already finished.
+    """
+    from .cli import defaults_for_build
+
+    args = defaults_for_build()
+    args.video = target
+    args.out = out
+    args.backend = backend
+    args.target_lang = target_lang
+    args.sub_lang = sub_lang
+    args.no_separate = not separate
+    args.no_diarize = not diarize
+    args.clip = f"{clip[0]:.0f}:{clip[1]:.0f}" if clip else None
+    args.translate_llm = translator in ("llm", "claude")
+    args.llm_engine = "claude" if translator == "claude" else "ollama"
+    args.llm_model = "sonnet" if translator == "claude" else "gemma3:12b"
+    args.translate_local = translator == "marian"
+    args.export_translation = translator == "export"
+    args.original_voices = originals if originals is not None else -16.0
+    args.no_original_voices = originals is None
+    return args

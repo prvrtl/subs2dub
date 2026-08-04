@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
+from . import confidence as conf
 from .model import Cue
 from .provenance import reuse
 
@@ -23,6 +24,13 @@ EMBED_SR = 16_000
 _MIN_SEG = 0.45
 _WIN = 2.0
 _EMB_DIM = 192
+
+SEPARABLE = 0.40
+UNSEPARABLE = 0.20
+LOPSIDED = 0.90
+SKEWED = 0.75
+EMBEDDED_OK = 0.85
+EMBEDDED_BAD = 0.60
 
 
 def _current(derived: Path, source: Path) -> bool:
@@ -204,6 +212,58 @@ def _merge_close(
     return labels
 
 
+def separability(X: np.ndarray, k: int) -> float:
+    """How cleanly the embeddings fall into k groups, 0 to 1.
+
+    Below roughly 0.2 the voices are not separable from the audio at all -
+    telephone filtering, shouting and heavy processing all flatten the
+    differences the embedder relies on. The count chosen in that regime is
+    arbitrary, so it is worth saying so rather than presenting it as a finding.
+    """
+    from sklearn.cluster import AgglomerativeClustering
+    from sklearn.metrics import silhouette_score
+
+    if len(X) <= k or k < 2:
+        return 0.0
+    try:
+        lab = AgglomerativeClustering(
+            n_clusters=k, metric="cosine", linkage="average"
+        ).fit_predict(X)
+        return float(silhouette_score(X, lab, metric="cosine"))
+    except Exception:
+        return 0.0
+
+
+def label_quality(X: np.ndarray, labels: np.ndarray) -> float:
+    """Silhouette score of the clustering actually produced, 0 to 1.
+
+    separability() re-clusters from scratch, so it scores a hypothetical
+    partition; this scores the labels cast.tsv will actually carry, which is
+    the number a listener discovers the hard way when a split goes wrong.
+    """
+    from sklearn.metrics import silhouette_score
+
+    if len(set(labels.tolist())) < 2:
+        return 0.0
+    try:
+        return float(silhouette_score(X, labels, metric="cosine"))
+    except Exception:
+        return 0.0
+
+
+def largest_share(labels: np.ndarray) -> float:
+    """Fraction of all cues carried by the single largest speaker cluster.
+
+    Silhouette alone misses the forced-speaker-count failure: a 57/2 split can
+    still score acceptably while being useless, and 57 of 59 lines in one
+    cluster is the plainer signal that the split did not happen.
+    """
+    if len(labels) == 0:
+        return 0.0
+    _, counts = np.unique(labels, return_counts=True)
+    return float(counts.max() / len(labels))
+
+
 def _auto_k(X: np.ndarray, kmax: int) -> int:
     """Pick a speaker count by silhouette score over cosine distance."""
     from sklearn.cluster import AgglomerativeClustering
@@ -295,7 +355,7 @@ def cue_f0(cues: list[Cue], wav: Path) -> np.ndarray:
             continue
         try:
             f0, voiced, _ = librosa.pyin(
-                seg, fmin=60, fmax=400, sr=sr, frame_length=1024
+                seg, fmin=75, fmax=400, sr=sr, frame_length=1024
             )
             f0 = f0[np.isfinite(f0) & voiced] if voiced is not None else f0
             f0 = f0[np.isfinite(f0)]
@@ -303,6 +363,46 @@ def cue_f0(cues: list[Cue], wav: Path) -> np.ndarray:
                 out[i] = float(np.median(f0))
         except Exception:
             continue
+    return out
+
+
+def cluster_by_pitch(
+    labels: np.ndarray, f0: np.ndarray, n_speakers: int | None = None,
+    apart: float = 90.0,
+) -> np.ndarray:
+    """Group cues by pitch when the voice embeddings cannot separate them.
+
+    Embeddings fail on processed audio, and on material where one performer
+    plays several characters they are answering the wrong question: the voices
+    really are the same person. Pitch is a far weaker identity signal in
+    general, but when a scene holds a low voice and a high one it separates
+    them outright where the embeddings do not separate them at all.
+
+    Only used when the embeddings have already been measured as unreliable, and
+    only when the pitches genuinely fall into two groups far apart. Otherwise
+    the existing labels stand.
+    """
+    usable = np.flatnonzero(np.isfinite(f0))
+    if usable.size < 6:
+        return labels
+    values = np.sort(f0[usable])
+
+    best, cut = 0.0, None
+    for k in range(2, values.size - 1):
+        low, high = values[:k], values[k:]
+        gap = float(np.median(high) - np.median(low))
+        spread = max((low.std() + high.std()) / 2.0, 15.0)
+        score = gap / spread
+        if gap >= apart and score > best:
+            best, cut = score, (values[k - 1] + values[k]) / 2.0
+
+    if cut is None or best < 1.2:
+        return labels
+    if n_speakers and n_speakers < 2:
+        return labels
+
+    out = labels.copy()
+    out[usable] = (f0[usable] > cut).astype(int)
     return out
 
 
@@ -341,9 +441,14 @@ def split_by_pitch(
 
 
 def median_f0(
-    cues: list[Cue], wav: Path, labels: np.ndarray, per_speaker: int = 15
-) -> dict[int, float]:
-    """Median pitch per speaker. Meaningful only on an isolated vocal stem."""
+    cues: list[Cue], wav: Path, labels, per_speaker: int = 15
+) -> dict:
+    """Median pitch per speaker, keyed by whatever label the cues carry.
+
+    Meaningful only on an isolated vocal stem. `diarize()` passes integer
+    cluster ids; the --cast path passes the string speaker labels cues already
+    hold, so this needs no coercion of its own.
+    """
     import librosa
     import soundfile as sf
 
@@ -351,9 +456,8 @@ def median_f0(
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
 
-    pitches: dict[int, list[float]] = {}
+    pitches: dict = {}
     for c, lab in zip(cues, labels):
-        lab = int(lab)
         if len(pitches.get(lab, [])) >= per_speaker:
             continue
         seg = audio[int(c.start * sr):int(c.end * sr)]
@@ -361,7 +465,7 @@ def median_f0(
             continue
         try:
             f0, voiced, _ = librosa.pyin(
-                seg, fmin=60, fmax=400, sr=sr, frame_length=1024
+                seg, fmin=75, fmax=400, sr=sr, frame_length=1024
             )
             f0 = f0[np.isfinite(f0) & voiced] if voiced is not None else f0
             f0 = f0[np.isfinite(f0)]
@@ -370,6 +474,69 @@ def median_f0(
         except Exception:
             continue
     return {k: float(np.median(v)) for k, v in pitches.items() if v}
+
+
+def analysis_wav(
+    video: Path, work: Path, audio_stream: int = 0, vocals: Path | None = None,
+) -> Path:
+    """The 16 kHz mono wav that embedding and pitch tracking both work from.
+
+    The vocal stem is preferred whenever it exists, because pitch measured
+    over music describes the scene rather than the speaker.
+    """
+    if vocals is not None:
+        wav = vocals.with_name("vocals16k.wav")
+        return reuse(work, wav, lambda: to_mono16k(vocals, wav), source=vocals)
+    wav = work / f"{video.stem}-{audio_stream}-16k.wav"
+    return reuse(work, wav, lambda: extract_audio(video, wav, audio_stream),
+                  source=video, stream=audio_stream)
+
+
+def _assign_from_anchors(
+    embs: np.ndarray, valid: np.ndarray, anchors: np.ndarray,
+) -> np.ndarray:
+    """Label every cue from a small set of video-anchored characters.
+
+    Anchored cues keep their video label outright. Every other cue is asked
+    which anchored character's audio centroid it sits closest to - a nearest-
+    of-two-known-things question, not a how-many-groups-are-there one, and it
+    stays answerable on audio that has no usable structure of its own for
+    blind clustering. A cue with no usable embedding, or with no centroid
+    close enough to trust, falls back to whichever labelled cue sits nearest
+    in time - the same rule cluster_speakers() uses for invalid rows.
+    """
+    labels = np.full(len(anchors), -1, dtype=int)
+    anchored = np.flatnonzero(anchors >= 0)
+    labels[anchored] = anchors[anchored]
+
+    centroids: dict[int, np.ndarray] = {}
+    for cid in sorted(set(anchors[anchored].tolist())):
+        idx = anchored[(anchors[anchored] == cid) & valid[anchored]]
+        if idx.size:
+            v = embs[idx].mean(axis=0)
+            centroids[cid] = v / (np.linalg.norm(v) + 1e-9)
+
+    for i in np.flatnonzero(labels < 0):
+        if valid[i] and centroids:
+            ranked = sorted(
+                ((cid, float(embs[i] @ c)) for cid, c in centroids.items()),
+                key=lambda kv: -kv[1],
+            )
+            best_cid, best = ranked[0]
+            runner = ranked[1][1] if len(ranked) > 1 else -1.0
+            if len(ranked) == 1 or best - runner >= 0.05:
+                labels[i] = best_cid
+
+    still_open = np.flatnonzero(labels < 0)
+    if still_open.size:
+        known = np.flatnonzero(labels >= 0)
+        for i in still_open:
+            labels[i] = (
+                labels[known[np.argmin(np.abs(known - i))]] if known.size else 0
+            )
+
+    remap = {old: new for new, old in enumerate(sorted(set(labels.tolist())))}
+    return np.array([remap[v] for v in labels], dtype=int)
 
 
 def diarize(
@@ -384,26 +551,99 @@ def diarize(
     audio_stream: int = 0,
     vocals: Path | None = None,
     progress=None,
+    checks: list | None = None,
+    anchors: np.ndarray | None = None,
 ) -> dict[int, float]:
     """Label every cue with a speaker id. Returns median F0 per speaker.
 
     Pass `vocals` (a Demucs stem) whenever available - clustering the mix is
-    what produced the six-speakers-for-two-people failure.
+    what produced the six-speakers-for-two-people failure. Pass `checks` to
+    have this append its confidence in the speaker split and in the embedding
+    coverage; a forced --speakers count is checked too, because forcing a
+    count does not guarantee the audio actually supports it.
+
+    Pass `anchors` (from vision.speakers()) when video has already answered
+    who is speaking for some cues: instead of clustering the audio from
+    scratch, every other cue is asked which anchored character its embedding
+    sits closest to. split_by_pitch is skipped in that case, since video has
+    already answered the question it exists to answer. Every other path here
+    is unchanged when `anchors` is None.
     """
-    if vocals is not None:
-        wav = vocals.with_name("vocals16k.wav")
-        reuse(work, wav, lambda: to_mono16k(vocals, wav), source=vocals)
-    else:
-        wav = work / f"{video.stem}-{audio_stream}-16k.wav"
-        reuse(work, wav, lambda: extract_audio(video, wav, audio_stream),
-              source=video, stream=audio_stream)
+    wav = analysis_wav(video, work, audio_stream, vocals)
 
     embs, valid = embed_cues(cues, wav, work / "models", progress=progress)
-    labels = cluster_speakers(
-        embs, valid, n_speakers, max_speakers, merge_sim, min_lines
-    )
-    if not n_speakers:
-        labels = split_by_pitch(labels, cue_f0(cues, wav))
+    if anchors is not None and (anchors >= 0).any():
+        labels = _assign_from_anchors(embs, valid, anchors)
+    else:
+        labels = cluster_speakers(
+            embs, valid, n_speakers, max_speakers, merge_sim, min_lines
+        )
+        f0 = cue_f0(cues, wav)
+        if separability(embs[valid], len(set(labels[valid].tolist()))) < 0.20:
+            labels = cluster_by_pitch(labels, f0, n_speakers)
+        if not n_speakers:
+            labels = split_by_pitch(labels, f0)
     for c, lab in zip(cues, labels):
         c.speaker = f"S{int(lab):02d}"
+
+    if checks is not None:
+        checks.append(_speaker_check(embs, valid, labels, n_speakers))
+        checks.append(_embedding_check(valid, vocals))
+
     return {int(k): v for k, v in median_f0(cues, wav, labels).items()}
+
+
+def _speaker_check(
+    embs: np.ndarray, valid: np.ndarray, labels: np.ndarray, n_speakers: int | None,
+) -> conf.Check:
+    """How much to trust the speaker split just produced."""
+    quality = label_quality(embs[valid], labels[valid])
+    share = largest_share(labels)
+    n_labels = len(set(labels.tolist()))
+
+    if quality < UNSEPARABLE or (share > LOPSIDED and n_labels > 1):
+        level = conf.UNRELIABLE
+    elif quality < SEPARABLE or share > SKEWED:
+        level = conf.WEAK
+    else:
+        level = conf.OK
+
+    detail = (
+        f"silhouette {quality:.2f} of 1.0 at {n_labels} speakers, "
+        f"{int(round(share * len(labels)))} of {len(labels)} lines in one cluster"
+    )
+    if n_speakers is None:
+        remedy = (
+            "pass --speakers N if you know how many voices there are, or "
+            "--cast FILE to assign speakers by hand, or --no-diarize for one voice"
+        )
+    else:
+        remedy = (
+            "--speakers N did not separate them; edit cast.tsv and pass it back "
+            "with --cast FILE, raise --merge-sim above 0.55, or use --no-diarize "
+            "for one voice"
+        )
+    return conf.Check(
+        stage="speakers", level=level, detail=detail, remedy=remedy, score=quality,
+    )
+
+
+def _embedding_check(valid: np.ndarray, vocals: Path | None) -> conf.Check:
+    """How much of the speaker labelling rests on a measured embedding.
+
+    Cues with no usable embedding inherit a neighbour's label silently in
+    cluster_speakers(), so this share is exactly the share of speaker labels
+    that were guessed rather than measured.
+    """
+    score = float(valid.mean()) if len(valid) else 0.0
+    level = conf.band(score, EMBEDDED_OK, EMBEDDED_BAD)
+    detail = f"{int(valid.sum())} of {len(valid)} cues had usable speech in their window"
+    remedy = (
+        "drop --no-separate so cues are embedded from the isolated vocal stem"
+        if vocals is None else
+        "check --audio-stream N - these cues had no measurable speech where the "
+        "subtitles say there was some"
+    )
+    return conf.Check(
+        stage="embeddings", level=level, detail=detail, remedy=remedy, score=score,
+    )

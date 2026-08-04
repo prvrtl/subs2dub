@@ -4,15 +4,7 @@ Which engine to use depends mostly on the language and how much time there is:
 
   kokoro      English, 28 preset voices, very fast.
   chatterbox  English, clones a voice from a reference clip, expressive.
-  piper       Many languages including Ukrainian. Fast and plainly synthetic.
-  styletts2   Ukrainian, clones from a reference clip. Predicts durations in
-              one pass, so it has real speed control and cannot stall or run on.
-  fish        Ukrainian, clones from a reference clip. Higher sample rate, but
-              autoregressive: slower, and prone to both faults above.
-
-The two large engines pin torch versions that conflict with this package, so
-they run in their own virtualenvs and are driven over a pipe by _WorkerBackend.
-
+  piper       Many languages. Fast, and plainly synthetic.
 The fitter holds all the timing logic; an engine only has to synthesize a line
 and say whether it can do so at a requested speed.
 """
@@ -56,6 +48,38 @@ KOKORO_VOICES = [
 
 def voice_gender(voice: str) -> str:
     return "F" if voice[1] == "f" else "M"
+
+
+LINE_SEP = "||"
+
+_DIGESTS: dict[str, str] = {}
+
+
+def voice_key(voice: str) -> str:
+    """Name a voice for the cache by its contents, not by its filename.
+
+    A reference clip keeps its name from run to run while its contents follow
+    the cast: re-assigning lines rebuilds a character's clip from a different
+    set of them. Keyed on the name alone, a line that was just re-cast is
+    served the previous character's audio, which reads as the edit having
+    been ignored.
+    """
+    if not voice:
+        return voice
+    parts = []
+    for piece in voice.split(LINE_SEP):
+        p = Path(piece) if piece else None
+        if not piece or p is None or not p.is_file():
+            parts.append(piece)
+            continue
+        st = p.stat()
+        cache_key = f"{p}:{st.st_size}:{int(st.st_mtime)}"
+        digest = _DIGESTS.get(cache_key)
+        if digest is None:
+            digest = hashlib.sha1(p.read_bytes()).hexdigest()[:12]
+            _DIGESTS[cache_key] = digest
+        parts.append(f"{p.name}:{digest}")
+    return "|".join(parts)
 
 
 class KokoroTTS:
@@ -179,7 +203,7 @@ class ChatterboxTTS:
     def _cache_path(self, text: str, voice: str, emotion: float) -> Path | None:
         if not self.cache_dir:
             return None
-        who = Path(voice).name if voice else "builtin"
+        who = voice_key(voice) if voice else "builtin"
         key = hashlib.sha1(
             f"cb|{who}|{emotion:.2f}|{text}".encode()
         ).hexdigest()[:20]
@@ -221,7 +245,7 @@ PIPER_VOICES: dict[str, dict[str, tuple[str, str]]] = {
 class PiperTTS:
     """Piper: small ONNX voices covering languages the larger models omit.
 
-    Used here for Ukrainian, which Kokoro and Chatterbox do not support. Quality
+    Covers languages Kokoro and Chatterbox do not support. Quality
     sits below either of them, but `length_scale` gives real rate control, so the
     fitter keeps its re-synthesis lever, and pairing it with voice conversion
     recovers most of the character it lacks on its own.
@@ -381,227 +405,6 @@ def compress_pauses(
     return np.concatenate([out, tail]) if tail.size else out
 
 
-class FishSpeechTTS:
-    """Fish Speech 1.5 over a pipe, for languages the mainstream models omit.
-
-    Used with a Ukrainian fine-tune. Unlike the VITS-class alternatives it models
-    prosody properly and clones voices natively through in-context reference
-    audio, so no separate conversion stage is needed.
-
-    It exposes no rate control, so the fitter falls back to time-stretching for
-    over-long lines. Getting the translation to fit its window matters more here
-    than with a backend that can re-articulate faster.
-    """
-
-    sample_rate = 44_100
-    max_speed = 1.0
-    supports_speed = False
-    clones = True
-
-    def __init__(
-        self,
-        repo: Path,
-        checkpoint: Path,
-        cache_dir: Path | None = None,
-        device: str | None = None,
-        temperature: float = 0.7,
-        half: bool = False,
-        compile: bool = False,
-    ) -> None:
-        self.repo = Path(repo).expanduser()
-        self.checkpoint = Path(checkpoint).expanduser()
-        self.cache_dir = cache_dir
-        self.device = device
-        self.temperature = temperature
-        self.half = half
-        self.compile = compile
-        self._proc = None
-        self._log = None
-        self._reader = None
-        if cache_dir:
-            cache_dir.mkdir(parents=True, exist_ok=True)
-
-    def voices(self) -> list[str]:
-        return []
-
-    def _start(self):
-        if self._proc is not None:
-            return self._proc
-        import json
-        import subprocess
-
-        python = self.repo / ".venv" / "bin" / "python"
-        if not python.exists():
-            raise SystemExit(
-                "the fish engine is not installed yet.\n"
-                "  it needs its own checkout, because it pins a torch version\n"
-                "  that conflicts with this one. Install it with:\n\n"
-                "      ./scripts/setup.sh --fish\n"
-            )
-
-        decoder = self.checkpoint / "firefly-gan-vq-fsq-8x1024-21hz-generator.pth"
-        cfg = {
-            "llama": str(self.checkpoint),
-            "decoder": str(decoder),
-            "device": self.device,
-            "half": self.half,
-            "compile": self.compile,
-        }
-        worker = Path(__file__).with_name("fish_worker.py")
-        self._log = open(
-            (self.cache_dir or self.repo) / "fish_worker.log", "w"
-        )
-        self._proc = subprocess.Popen(
-            [str(python), str(worker), json.dumps(cfg)],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._log,
-            text=True, cwd=str(self.repo), bufsize=1,
-        )
-        hello = self._read_reply()
-        if not hello.get("ready"):
-            raise RuntimeError(
-                f"Fish Speech worker failed to start: {hello.get('err')}\n"
-                f"{hello.get('trace', '')}\nsee {self._log.name}"
-            )
-        return self._proc
-
-    def _read_reply(self, timeout: float = 900.0) -> dict:
-        """Read one reply, giving up rather than waiting on a dead worker.
-
-        A plain readline() here can block forever. If the worker dies after
-        spawning something that inherited its stdout - a model download, say -
-        the pipe never reaches EOF, and the run stops with no explanation and
-        no way back.
-        """
-        import json
-        import queue
-        import threading
-        import time
-
-        assert self._proc is not None
-        if getattr(self, "_reader", None) is None:
-            self._replies: queue.Queue = queue.Queue()
-            self._reader = threading.Thread(
-                target=_pump, args=(self._proc.stdout, self._replies),
-                daemon=True,
-            )
-            self._reader.start()
-
-        deadline = time.time() + timeout
-        while True:
-            left = deadline - time.time()
-            if left <= 0:
-                return {"ok": False, "err": f"worker silent for {timeout:.0f}s"}
-            try:
-                line = self._replies.get(timeout=min(2.0, left))
-            except queue.Empty:
-                if self._proc.poll() is not None:
-                    return {
-                        "ok": False,
-                        "err": f"worker exited ({self._proc.returncode}); see "
-                               f"{getattr(self._log, 'name', 'the worker log')}",
-                    }
-                continue
-            if line is None:
-                return {"ok": False, "err": "worker closed its output"}
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                return json.loads(line)
-            except ValueError:
-                continue
-
-    def _cache_path(self, text: str, voice: str, attempt: int = 0) -> Path | None:
-        if not self.cache_dir:
-            return None
-        who = Path(voice).name if voice else "default"
-        key = hashlib.sha1(
-            f"fish|{who}|{self.temperature:.2f}|{attempt}|{text}".encode()
-        ).hexdigest()[:20]
-        return self.cache_dir / f"{key}.wav"
-
-    def synth(
-        self, text: str, voice: str, speed: float = 1.0, emotion: float = 0.5,
-        attempt: int = 0,
-    ) -> np.ndarray:
-        del speed, emotion
-        cached = self._cache_path(text, voice, attempt)
-        if cached and cached.exists():
-            audio, sr = sf.read(cached, dtype="float32")
-            self.sample_rate = sr
-            return compress_pauses(audio, sr)
-
-        audio = self._generate(
-            text, voice, self.temperature + 0.12 * attempt, cached
-        )
-        if audio.size / self.sample_rate > RUNAWAY * len(text) / CHARS_PER_SEC:
-            second = self._generate(text, voice, 0.3, cached)
-            if second.size and second.size < audio.size:
-                audio = second
-            elif cached:
-                sf.write(cached, audio, self.sample_rate)
-        return audio
-
-    def _generate(
-        self, text: str, voice: str, temperature: float, cached: Path | None,
-        restarts: int = 1,
-    ) -> np.ndarray:
-        try:
-            return self._request(text, voice, temperature, cached)
-        except WorkerError:
-            if restarts <= 0:
-                raise
-            self.close()
-            return self._generate(text, voice, temperature, cached, restarts - 1)
-
-    def _request(
-        self, text: str, voice: str, temperature: float, cached: Path | None
-    ) -> np.ndarray:
-        import json
-        import tempfile
-
-        proc = self._start()
-        out = cached or Path(tempfile.mktemp(suffix=".wav"))
-        job = {
-            "text": text,
-            "out": str(out.resolve()),
-            "temperature": temperature,
-        }
-        if voice:
-            ref = Path(voice).resolve()
-            job["ref_audio"] = str(ref)
-            lab = ref.with_suffix(".lab")
-            if lab.exists():
-                job["ref_text"] = lab.read_text(encoding="utf-8").strip()
-        proc.stdin.write(json.dumps(job) + "\n")
-        proc.stdin.flush()
-
-        reply = self._read_reply()
-        if not reply.get("ok"):
-            raise WorkerError(
-                f"{reply.get('err')}\n{reply.get('trace', '')}".strip()
-            )
-
-        audio, sr = sf.read(out, dtype="float32")
-        if audio.ndim > 1:
-            audio = audio.mean(axis=1)
-        self.sample_rate = sr
-        return compress_pauses(_trim_silence(audio, sr), sr)
-
-    def close(self) -> None:
-        if self._proc is not None:
-            try:
-                import json
-
-                self._proc.stdin.write(json.dumps({"cmd": "quit"}) + "\n")
-                self._proc.stdin.flush()
-                self._proc.wait(timeout=15)
-            except Exception:
-                self._proc.kill()
-            self._proc = None
-            self._reader = None
-
-
 class _WorkerBackend:
     """Shared plumbing for models that run in their own virtualenv.
 
@@ -732,7 +535,7 @@ class _WorkerBackend:
     ) -> Path | None:
         if not self.cache_dir:
             return None
-        who = Path(voice).name if voice else "default"
+        who = voice_key(voice) if voice else "default"
         key = hashlib.sha1(
             f"{self.tag}|{who}|{attempt}|{text}".encode()
         ).hexdigest()[:20]
@@ -753,101 +556,14 @@ class _WorkerBackend:
         self._reader = None
 
 
-class StyleTTS2(_WorkerBackend):
-    """StyleTTS2 fine-tuned for Ukrainian, driven over a pipe.
-
-    Durations are predicted in one pass rather than sampled token by token, so
-    the two failure modes that dog autoregressive synthesis here - stalling into
-    silence, and never stopping - do not occur. `speed` re-articulates the line
-    instead of resampling it, which gives the fitter back its best lever.
-
-    A voice is cloned from a reference clip through a style vector that carries
-    both timbre and delivery.
-    """
-
-    sample_rate = 24_000
-    max_speed = 1.30
-    supports_speed = True
-    clones = True
-
-    worker = "styletts_worker.py"
-    tag = "styletts2"
-
-    def __init__(
-        self,
-        repo: Path,
-        hf_path: str = "patriotyk/styletts2_ukrainian_multispeaker",
-        cache_dir: Path | None = None,
-        device: str | None = None,
-    ) -> None:
-        super().__init__(repo, cache_dir, device)
-        self.hf_path = hf_path
-
-    def _config(self) -> dict:
-        return {
-            "repo": self.hf_path,
-            "device": self.device,
-            "sample_rate": self.sample_rate,
-        }
-
-    def voices(self) -> list[str]:
-        return []
-
-    def synth(
-        self, text: str, voice: str, speed: float = 1.0, emotion: float = 0.5,
-        attempt: int = 0,
-    ) -> np.ndarray:
-        del emotion
-        speed = float(min(max(speed, 0.7), self.max_speed))
-        cached = self._cache_path(f"{speed:.3f}|{text}", voice, attempt)
-        if cached and cached.exists():
-            audio, sr = sf.read(cached, dtype="float32")
-            self.sample_rate = sr
-            return audio
-
-        import tempfile
-
-        out = cached or Path(tempfile.mktemp(suffix=".wav"))
-        job = {
-            "text": text,
-            "speed": speed,
-            "out": str(out.resolve()),
-        }
-        if voice:
-            job["ref_audio"] = str(Path(voice).resolve())
-
-        reply = self._job(job)
-        if not reply.get("ok"):
-            raise WorkerError(
-                f"{reply.get('err')}\n{reply.get('trace', '')}".strip()
-            )
-
-        audio, sr = sf.read(out, dtype="float32")
-        if audio.ndim > 1:
-            audio = audio.mean(axis=1)
-        self.sample_rate = sr
-        return _trim_silence(audio, sr)
-
-
 def get_backend(
     name: str, cache_dir: Path | None = None, device: str | None = None,
     lang: str = "en",
 ) -> TTSBackend:
-    if name == "styletts2":
-        return StyleTTS2(
-            repo=Path("~/Developer/styletts2-ukrainian").expanduser(),
-            cache_dir=cache_dir, device=device,
-        )
     if name == "kokoro":
         return KokoroTTS(cache_dir=cache_dir)
     if name == "chatterbox":
         return ChatterboxTTS(cache_dir=cache_dir, device=device)
     if name == "piper":
         return PiperTTS(lang=lang, cache_dir=cache_dir)
-    if name == "fish":
-        return FishSpeechTTS(
-            repo=Path("~/Developer/fish-speech").expanduser(),
-            checkpoint=Path("~/Developer/fish-speech/checkpoints/uk").expanduser(),
-            cache_dir=cache_dir, device=device,
-        )
     raise ValueError(f"unknown TTS backend: {name!r}")

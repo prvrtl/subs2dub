@@ -49,6 +49,9 @@ class FitConfig:
     min_fill: float = 0.85
     max_slowdown: float = 0.94
     attempts: int = 3
+    takes: int = 1
+    match_register: float = 6.0
+    clip_ceiling: float = 0.89
 
 
 @dataclass
@@ -60,6 +63,8 @@ class FitReport:
     stretched: int = 0
     filled: int = 0
     redrawn: int = 0
+    repitched: int = 0
+    register: dict = field(default_factory=dict)
     overrun: list[Cue] = field(default_factory=list)
     failed: list[tuple[Cue, str]] = field(default_factory=list)
     problems: list = field(default_factory=list)
@@ -127,6 +132,22 @@ def _cap(audio: np.ndarray, sr: int, seconds: float) -> np.ndarray:
     return out
 
 
+def _headroom(audio: np.ndarray, ceiling: float) -> np.ndarray:
+    """Hold a clip below full scale before it reaches the bus.
+
+    Intensity transfer and a lively emotion setting both raise level, and a
+    clip that already sits at full scale has nowhere to go: it clips on its own
+    and again when the background is mixed under it. Scaling the loudest clips
+    down loses nothing, since the track is normalised as a whole afterwards.
+    """
+    if audio.size == 0:
+        return audio
+    peak = float(np.max(np.abs(audio)))
+    if peak <= ceiling or peak <= 0:
+        return audio
+    return (audio * (ceiling / peak)).astype(np.float32)
+
+
 def _duck_tail(
     audio: np.ndarray, sr: int, from_seconds: float, gain_db: float
 ) -> np.ndarray:
@@ -183,30 +204,130 @@ def _synth_checked(
     backend: TTSBackend, text: str, voice: str, cue: Cue,
     cfg: FitConfig, report: FitReport,
 ) -> np.ndarray:
-    """Synthesize, and draw again while the result is obviously broken.
+    """Synthesize, and spend more draws where they buy something.
 
-    The checks are the cheap, unambiguous ones: a clip far too short for its
-    text has dropped words, and a clip that is mostly silence has stalled.
-    Neither is worth laying into the track when another draw is available.
+    Two reasons to draw again. A take can be plainly broken - far too short for
+    its text, or mostly silence - and is then not worth laying into the track.
+    A take can also simply be worse than another: synthesis is sampled, so
+    delivery varies between draws, and one of them sits closer to how the line
+    was actually said. Where the original delivery is known, takes are scored
+    against it and the closest kept.
     """
     sr = backend.sample_rate
+    takes = max(1, cfg.takes)
+    tries = max(cfg.attempts, takes)
     best = np.zeros(0, dtype=np.float32)
+    best_score = -1e9
+    good = 0
 
-    for attempt in range(max(1, cfg.attempts)):
+    for attempt in range(tries):
         try:
             audio = backend.synth(
                 text, voice, speed=1.0, emotion=cue.emotion, attempt=attempt
             )
         except TypeError:
-            audio = backend.synth(text, voice, speed=1.0, emotion=cue.emotion)
-            return audio
-        if audio.size > best.size:
-            best = audio
-        if not _obviously_broken(audio, sr, text):
-            return audio
-        report.redrawn += 1
+            return backend.synth(text, voice, speed=1.0, emotion=cue.emotion)
 
-    return best
+        if _obviously_broken(audio, sr, text):
+            report.redrawn += 1
+            if audio.size > best.size and best_score <= -1e8:
+                best = audio
+            continue
+
+        good += 1
+        score = _score_take(audio, sr, cue)
+        if score > best_score:
+            best, best_score = audio, score
+        if good >= takes:
+            break
+
+    return _match_register(best, sr, cue, cfg, report)
+
+
+def _match_register(
+    audio: np.ndarray, sr: int, cue: Cue, cfg: FitConfig, report: FitReport
+) -> np.ndarray:
+    """Move a cloned voice into the speaker's own register.
+
+    The style vector carries identity but not reliably pitch height, and a clone
+    sitting half an octave above the actor does not sound like them however
+    expressive it is. Formants are held while shifting, so the voice deepens
+    rather than turning into a caricature.
+
+    The correction is per speaker rather than per line: a shift recomputed every
+    line would wander with the pitch estimate and make the character's voice
+    drift about.
+    """
+    from . import pitch as pitchmod
+
+    target = cue.speaker_f0 or cue.source_f0
+    if cfg.match_register <= 0 or audio.size == 0:
+        return audio
+    if not pitchmod.plausible(target):
+        return audio
+    median, _ = _pitch_shape(audio, sr)
+    if not pitchmod.plausible(median):
+        return audio
+
+    history = report.register.setdefault(cue.speaker or "", [])
+    history.append(target / median)
+    steps = 12.0 * float(np.log2(np.median(history[-16:])))
+    if abs(steps) < 0.75:
+        return audio
+    steps = max(-cfg.match_register, min(cfg.match_register, steps))
+
+    try:
+        import pyrubberband
+
+        shifted = pyrubberband.pitch_shift(
+            audio, sr, steps, rbargs={"-F": ""}
+        ).astype(np.float32)
+    except Exception:
+        return audio
+    if shifted.size:
+        cue.pitch_shift = steps
+        report.repitched += 1
+        return shifted
+    return audio
+
+
+def _score_take(audio: np.ndarray, sr: int, cue: Cue) -> float:
+    """How well a take matches how the line was actually delivered.
+
+    Register and expressive range are what a listener judges: a take an octave
+    off the speaker is wrong however clean it is, and a flat one is what gets
+    called robotic. Both are read from the original line.
+    """
+    if cue.source_f0 <= 0:
+        return -_internal_silence_seconds(audio, sr)
+
+    median, spread = _pitch_shape(audio, sr)
+    if median <= 0:
+        return -50.0
+
+    register = abs(12.0 * np.log2(median / cue.source_f0))
+    liveliness = min(spread, cue.source_f0_range or spread)
+    dead = _internal_silence_seconds(audio, sr)
+    return liveliness - 2.0 * register - 3.0 * dead
+
+
+def _pitch_shape(audio: np.ndarray, sr: int) -> tuple[float, float]:
+    try:
+        import librosa
+
+        f0, _, _ = librosa.pyin(audio, fmin=75, fmax=400, sr=sr, frame_length=2048)
+        v = f0[np.isfinite(f0)]
+        if v.size < 8:
+            return 0.0, 0.0
+        med = float(np.median(v))
+        semis = 12.0 * np.log2(v / med)
+        return med, float(np.percentile(semis, 90) - np.percentile(semis, 10))
+    except Exception:
+        return 0.0, 0.0
+
+
+def _internal_silence_seconds(audio: np.ndarray, sr: int) -> float:
+    return verify._internal_silence(audio, sr)
 
 
 def _obviously_broken(audio: np.ndarray, sr: int, text: str) -> bool:
@@ -310,6 +431,7 @@ def render_dialogue_track(
         if clip.size:
             if cue.gain_db:
                 clip = clip * float(10.0 ** (cue.gain_db / 20.0))
+            clip = _headroom(clip, cfg.clip_ceiling)
 
             nxt = cues[i + 1] if i + 1 < len(cues) else None
             free = cue.window + gaps[i] - cfg.borrow_guard

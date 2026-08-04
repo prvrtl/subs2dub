@@ -11,8 +11,8 @@ pass. Four routes:
     be told to be brief, and on en->uk it drifted into Russian on 18% of lines
     in testing, so treat it as a fallback.
 
-Translation is a timing problem as well as a language one. Ukrainian runs
-roughly 10-15% longer than the same line in English, so lines that fitted before
+Translation is a timing problem as well as a language one. Most languages run
+longer than the same line in English, so lines that fitted before
 translation may not afterwards. Only an instructable model can be asked for a
 shorter rendering, which is why the budget lives in this stage rather than being
 repaired by time-stretching later.
@@ -33,6 +33,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from . import confidence as conf
 from .model import Cue
 
 EXPANSION = {"uk": 1.12, "ru": 1.10, "de": 1.15, "es": 1.20, "fr": 1.18, "pl": 1.10}
@@ -112,7 +113,7 @@ def translate_local(
     return done
 
 
-CHARS_PER_SEC = {"uk": 13.8}
+CHARS_PER_SEC = {"en": 14.8}
 DEFAULT_CPS = 14.0
 
 LANGUAGE = {
@@ -374,6 +375,47 @@ def _translate_group(
             if text:
                 out[group[n - 1][0]] = text
     return out
+
+
+OVER_BUDGET_UNRELIABLE = 0.25
+OVER_BUDGET_WEAK = 0.10
+
+
+def over_budget(cues: list[Cue], target: str) -> tuple[int, int]:
+    """(lines over their character budget, total lines) after translation.
+
+    Works for every route cues can arrive by - LLM, MarianMT, or an imported
+    TSV - because it measures the text actually sitting on the cue, not a
+    route's own bookkeeping. translate_llm() returns its own `over` list, but
+    that only covers its own route.
+    """
+    over = sum(1 for c in cues if len(c.text) > budget_for(c, target))
+    return over, len(cues)
+
+
+def confidence(cues: list[Cue], target: str) -> conf.Check:
+    """How much to trust that the translated lines will fit their windows."""
+    over, total = over_budget(cues, target)
+    share = over / total if total else 0.0
+    level = conf.band(
+        share, OVER_BUDGET_WEAK, OVER_BUDGET_UNRELIABLE, higher_is_better=False,
+    )
+    worst = max(
+        (len(c.text) - budget_for(c, target) for c in cues), default=0,
+    )
+    detail = f"{over} of {total} lines are longer than their window allows"
+    if over:
+        detail += f", worst overrun {worst} characters"
+    remedy = (
+        "fill the rewrite column of work/overruns.tsv and re-run with "
+        "--rewrites, or use --llm-engine claude for tighter lines; "
+        "--max-speed and --max-stretch let the fitter compress more before "
+        "it gives up"
+    )
+    return conf.Check(
+        stage="translation", level=level, detail=detail, remedy=remedy,
+        score=share,
+    )
 
 
 def expansion_warning(cues: list[Cue], target: str) -> str | None:

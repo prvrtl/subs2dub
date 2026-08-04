@@ -54,7 +54,7 @@ def mux(
     dialogue_gain_db: float = 2.0,
     bg_gain_db: float = 0.0,
     voices_db: float = -16.0,
-    voices_duck_db: float = 14.0,
+    voices_duck_db: float = 9.0,
     keep_original: bool = True,
     loudnorm: bool = True,
 ) -> Path:
@@ -97,7 +97,7 @@ def mux(
             f"[{voices_idx}:a]aformat=sample_fmts=fltp:sample_rates=48000:"
             f"channel_layouts=stereo,volume={voices_db}dB[orig]",
             f"[orig][key2]sidechaincompress=threshold=0.02:ratio={vratio}:"
-            "attack=5:release=500:makeup=1[origducked]",
+            "attack=5:release=320:makeup=1[origducked]",
             "[ducked][origducked]amix=inputs=2:duration=first:normalize=0[beds]",
             "[beds][dlgmix]amix=inputs=2:duration=first:normalize=0[mixed]",
         ]

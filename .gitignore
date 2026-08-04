@@ -1,5 +1,6 @@
 # Environments
 .venv/
+.venv-vision/
 __pycache__/
 *.py[cod]
 *.egg-info/

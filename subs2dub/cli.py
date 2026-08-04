@@ -23,17 +23,18 @@ import time
 from pathlib import Path
 
 from . import adapt, casting, estimate, source as srcmod, translate as trmod
+from . import confidence as conf
 from . import glossary as glossmod
 from . import progress as prog
 from . import verify
 from . import cues as cuemod
-from .diarize import diarize
+from .diarize import analysis_wav, diarize, median_f0
 from .fit import FitConfig, render_dialogue_track
 from .mix import extract_clip, mux, probe_duration, write_dialogue_wav
 from .power import Awake
 from . import stems
 from .model import Cue
-from .tts import get_backend
+from .tts import LINE_SEP, get_backend
 
 
 def extract_subs(video: Path, out: Path, stream: int = 0) -> Path:
@@ -125,6 +126,13 @@ def _build(args: argparse.Namespace) -> int:
     work = work_dir_for(args.video, args.work)
     work.mkdir(parents=True, exist_ok=True)
     print(f"working directory: {work}")
+    checks: list[conf.Check] = []
+
+    if args.cast and args.no_diarize:
+        raise SystemExit(
+            "--cast and --no-diarize ask for different things: one voice for "
+            "everything, or the assignment in the file"
+        )
 
     clip_range = None
     if args.clip:
@@ -162,6 +170,7 @@ def _build(args: argparse.Namespace) -> int:
     all_cues = cues
     if track:
         print(track[0].describe())
+        checks.append(track[0].confidence())
     print(f"parsed {len(cues)} speakable cues")
 
     source = video
@@ -188,16 +197,81 @@ def _build(args: argparse.Namespace) -> int:
                 source, work / f"{source.stem}_src.wav", args.audio_stream
             )
             vocals, bed = stems.separate(src_wav, work, shifts=args.shifts)
+            vocals = stems.full_band_vocals(
+                vocals, src_wav, vocals.with_name("vocals_full.flac")
+            )
         print(f"  stems ready in {t_sep.seconds:.0f}s")
 
     backend = get_backend(args.backend, cache_dir=work / "cache",
                           lang=args.target_lang)
 
-    if args.no_diarize:
+    if args.cast:
+        cast_path = Path(args.cast).expanduser()
+        if not cast_path.exists():
+            raise SystemExit(f"no such file: {cast_path}")
+        try:
+            table = casting.load_cast(cast_path)
+        except ValueError as exc:
+            raise SystemExit(str(exc))
+
+        applied, missed = casting.apply_cast(cues, table)
+        if applied == 0:
+            raise SystemExit(
+                f"{cast_path} matched none of the {len(cues)} cues - rows are "
+                "matched on start time, so the file has to come from a run "
+                "over the same subtitles with the same --clip"
+            )
+        for c in cues:
+            c.voice = c.voice or args.voice
+
+        known = set(backend.voices())
+        unknown = sorted({c.voice for c in cues if known and c.voice not in known})
+        if unknown:
+            raise SystemExit(
+                f"{cast_path} names voices {backend.__class__.__name__} does "
+                f"not have: {', '.join(unknown)}"
+            )
+
+        wav = analysis_wav(source, work, args.audio_stream, vocals)
+        f0 = median_f0(cues, wav, [c.speaker or "" for c in cues])
+        for c in cues:
+            c.speaker_f0 = float(f0.get(c.speaker or "", 0.0))
+
+        print(f"cast from {cast_path}: {applied} cues set, {missed} left as read")
+        print(casting.describe_cast(cues, f0))
+        if getattr(backend, "clones", False) and not args.voice_convert:
+            print("  (this backend clones voices from the original cast, so "
+                  "the voice column has no effect - only speaker selects the "
+                  "reference clip)")
+    elif args.no_diarize:
         for c in cues:
             c.voice = args.voice
     else:
         print("identifying speakers...")
+
+        anchors = None
+        if args.speakers_from == "video":
+            from . import vision as visionmod
+
+            wav_for_vision = analysis_wav(source, work, args.audio_stream, vocals)
+
+            def vprog(done: int, n: int) -> None:
+                print(f"  scanning video {done}/{n} frames", end="\r", flush=True)
+
+            result = visionmod.speakers(
+                cues, source, work, wav=wav_for_vision,
+                n_speakers=args.speakers, progress=vprog,
+            )
+            if result is not None:
+                anchors = result.anchors
+                print(
+                    f"\n  video labelled {result.labelled} of {len(cues)} cues "
+                    f"across {result.n_characters} characters, identity "
+                    f"silhouette {result.silhouette:.2f}"
+                )
+            else:
+                print("\n  video found no usable answer; "
+                      "diarizing from audio alone")
 
         def dprog(done: int, n: int) -> None:
             print(f"  embedded {done}/{n} cues", end="\r", flush=True)
@@ -211,7 +285,11 @@ def _build(args: argparse.Namespace) -> int:
                 audio_stream=args.audio_stream,
                 vocals=vocals,
                 progress=dprog,
+                checks=checks,
+                anchors=anchors,
             )
+        for c in cues:
+            c.speaker_f0 = float(f0.get(int(c.speaker[1:]), 0.0)) if c.speaker else 0.0
         mapping = casting.cast(
             cues, f0, default_voice=args.voice,
             pools=getattr(backend, 'voice_pools', lambda: None)(),
@@ -219,25 +297,28 @@ def _build(args: argparse.Namespace) -> int:
         print(f"\nfound {len(mapping)} speakers")
         print(casting.describe(cues, mapping, f0))
 
-        cast_tsv = work / "cast.tsv"
-        with cast_tsv.open("w") as fh:
-            fh.write("idx\tstart\tspeaker\tvoice\ttext\n")
-            for c in cues:
-                fh.write(
-                    f"{c.idx}\t{c.start:.2f}\t{c.speaker}\t{c.voice}\t{c.text}\n"
-                )
-        print(f"per-cue assignment: {cast_tsv}")
+        cast_tsv = casting.export_cast(cues, work / "cast.tsv")
+        print(f"per-cue assignment: {cast_tsv} - edit it and pass it back with "
+              f"--cast {cast_tsv} to re-cast without re-running diarization")
 
     if args.target_lang != "en":
-        warn = trmod.expansion_warning(cues, args.target_lang)
-        if warn:
-            print(warn)
-        if args.translations:
+        reused = 0
+        if args.cast and not args.translations:
+            prev = verify.previous_text(work / "render.json")
+            if prev:
+                reused = trmod.apply_translations(cues, prev)
+                print(f"reused {reused} translated lines from a previous render")
+        if reused >= len(cues):
+            pass
+        elif args.translations:
             tp = Path(args.translations).expanduser()
             n = trmod.apply_translations(
                 cues, trmod.load_translations(tp, args.target_lang))
             print(f"applied {n} translated lines from {tp}")
         elif args.export_translation:
+            warn = trmod.expansion_warning(cues, args.target_lang)
+            if warn:
+                print(warn)
             out_tsv = trmod.export_for_translation(
                 cues, work / f"translate_{args.target_lang}.tsv", args.target_lang)
             raise SystemExit(
@@ -297,6 +378,8 @@ def _build(args: argparse.Namespace) -> int:
                 f"--target-lang {args.target_lang} needs a translation source: "
                 "--export-translation, --translations FILE, or --translate-local")
 
+        checks.append(trmod.confidence(cues, args.target_lang))
+
     if not args.no_prosody and vocals is not None:
         from . import prosody
         from .diarize import to_mono16k
@@ -349,6 +432,7 @@ def _build(args: argparse.Namespace) -> int:
         backend = VoiceConvertBackend(backend, conv, tau=args.convert_tau)
         print(f"voice conversion: {len(clips)} target voices, tau={args.convert_tau}")
         print(refsmod.describe(clips))
+        checks.append(conf.references(*refsmod.usable(clips)))
 
     elif getattr(backend, "clones", False):
         if vocals is None:
@@ -361,8 +445,14 @@ def _build(args: argparse.Namespace) -> int:
         clips = refsmod.build_references(cues, vocals, work / "refs")
         if not clips:
             raise SystemExit("could not cut any usable reference clips")
+        if getattr(backend, "per_line_style", False) and vocals is not None:
+            n = refsmod.line_clips(cues, vw if 'vw' in dir() else vocals,
+                                   work / "lines")
+            if n:
+                print(f"per-line delivery taken from {n} original lines")
         print(f"cloning {len(clips)} voices from the original cast:")
         print(refsmod.describe(clips))
+        checks.append(conf.references(*refsmod.usable(clips)))
         missing = 0
         for c in cues:
             ref = clips.get(c.speaker or "")
@@ -370,9 +460,15 @@ def _build(args: argparse.Namespace) -> int:
                 ref = clips[max(clips, key=lambda s: sum(
                     1 for x in cues if x.speaker == s))]
                 missing += 1
-            c.voice = str(ref)
+            c.voice = f"{ref}{LINE_SEP}{c.line_ref}" if c.line_ref else str(ref)
         if missing:
             print(f"  ({missing} cues fell back to the lead voice)")
+
+    summary = conf.report(checks)
+    if summary:
+        print(summary)
+    conf.record(checks, work / "confidence.json")
+
     gaps = cuemod.gaps(cues, total)
 
     t0 = time.time()
@@ -396,6 +492,8 @@ def _build(args: argparse.Namespace) -> int:
                 max_engine_speed=args.max_speed,
                 max_stretch=args.max_stretch,
                 max_borrow=args.max_borrow,
+                takes=args.takes,
+                match_register=args.match_register,
             ),
             progress=reporter,
         )
@@ -447,7 +545,12 @@ def _build(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The one place flags are declared.
+
+    The interactive path takes its defaults from here rather than restating
+    them, so a flag added to the parser cannot be missing from a wizard run.
+    """
     p = argparse.ArgumentParser(prog="subs2dub")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -457,21 +560,30 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("-s", "--subs", help="SRT/ASS file (default: extract embedded)")
     b.add_argument("--sub-stream", type=int, default=0)
     b.add_argument("--work", default="./work")
-    b.add_argument("--backend", default="kokoro",
-                   choices=("kokoro", "chatterbox", "piper", "fish", "styletts2"),
-                   help="speech engine; styletts2 for Ukrainian, kokoro or "
-                        "chatterbox for English")
+    b.add_argument("--backend", default="chatterbox",
+                   choices=("chatterbox", "kokoro", "piper"),
+                   help="chatterbox clones the cast, kokoro is faster with "
+                        "preset voices, piper covers more languages")
     b.add_argument("--voice", default="af_heart",
                    help="voice used when diarization is off or a speaker is unknown")
     b.add_argument("--no-diarize", action="store_true",
                    help="one voice for everything")
     b.add_argument("--speakers", type=int,
                    help="force an exact speaker count instead of auto")
+    b.add_argument("--speakers-from", choices=("audio", "video"), default="audio",
+                   help="video tracks faces and correlates mouth motion with "
+                        "the audio to anchor speakers, useful when the audio "
+                        "embeddings alone can't separate the cast; falls back "
+                        "to audio when it can't find a confident answer. "
+                        "needs ./scripts/setup.sh --vision")
     b.add_argument("--max-speakers", type=int, default=20,
                    help="upper bound when auto-detecting speaker count")
     b.add_argument("--merge-sim", type=float, default=0.55,
                    help="centroid similarity above which two clusters are merged "
                         "into one character; raise for more speakers")
+    b.add_argument("--cast",
+                   help="TSV of speaker and voice per cue, edited from the "
+                        "cast.tsv a previous run wrote; skips diarization")
     b.add_argument("--audio-stream", type=int, default=0)
     b.add_argument("--no-separate", action="store_true",
                    help="skip Demucs; original dialogue stays audible under the dub")
@@ -482,14 +594,21 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--max-speed", type=float, default=1.25)
     b.add_argument("--max-stretch", type=float, default=1.15)
     b.add_argument("--max-borrow", type=float, default=1.50)
-    b.add_argument("--duck", type=float, default=9.0)
+    b.add_argument("--duck", type=float, default=5.5,
+                   help="how far music and effects dip under the dub")
     b.add_argument("--dialogue-gain", type=float, default=2.0)
     b.add_argument("--drop-original", action="store_true")
-    b.add_argument("--original-voices", type=float, default=-16.0,
+    b.add_argument("--original-voices", type=float, default=-11.0,
                    help="level in dB for the original cast under the dub, so "
                         "laughter and reactions stay audible (0 = same as dub)")
     b.add_argument("--no-original-voices", action="store_true",
                    help="remove the original speech entirely")
+    b.add_argument("--takes", type=int, default=1,
+                   help="synthesize each line this many times and keep the take "
+                        "closest to the original delivery")
+    b.add_argument("--match-register", type=float, default=6.0,
+                   help="semitones of pitch correction allowed to bring a cloned "
+                        "voice into the speaker's own register (0 disables)")
     b.add_argument("--report-n", type=int, default=8)
     b.add_argument("--rewrites",
                    help="TSV of shortened lines produced from overruns.tsv")
@@ -542,6 +661,16 @@ def main(argv: list[str] | None = None) -> int:
 
     w = sub.add_parser("wizard", help="interactive setup with a runtime estimate")
     w.set_defaults(func=lambda _a: wizard_run())
+    return p
+
+
+def defaults_for_build() -> argparse.Namespace:
+    """Every build flag at its default, for the interactive path to override."""
+    return build_parser().parse_args(["build", ""])
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = build_parser()
 
     if not argv and len(sys.argv) == 1:
         return wizard_run()

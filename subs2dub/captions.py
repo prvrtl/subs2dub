@@ -27,6 +27,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import confidence as conf
+
 _WS = re.compile(r"\s+")
 _MEMORY = 40
 
@@ -51,6 +53,7 @@ class TrackInfo:
     rolling: bool = False
     duplicated: int = 0
     removed_words: int = 0
+    words: int = 0
     kind: str = "subtitles"
     notes: list[str] = field(default_factory=list)
 
@@ -59,6 +62,61 @@ class TrackInfo:
         for note in self.notes:
             out.append(f"    {note}")
         return "\n".join(out)
+
+    def confidence(self) -> conf.Check:
+        """How much to trust this track as a script for dubbing.
+
+        Automatic captions carry no sentence punctuation, so lines merge
+        conservatively and questions lose their intonation; a rolling track
+        that had to repeat more words than it kept was carried by the repair
+        rather than by the track itself.
+        """
+        remedy = (
+            "supply an authored subtitle track with --subs FILE; automatic "
+            "captions carry no sentence punctuation, so lines merge "
+            "conservatively and questions lose their intonation; "
+            "--no-auto-captions refuses them when the source is a URL"
+        )
+
+        if self.events == 0:
+            return conf.Check(
+                stage="subtitles", level=conf.UNRELIABLE,
+                detail="no dialogue lines parsed from the track", remedy=remedy,
+            )
+
+        if self.rolling and self.removed_words > self.words:
+            detail = (
+                f"{self.kind}, {self.removed_words} of {self.words} words "
+                f"were repeats - the repair carried the track"
+            )
+            return conf.Check(
+                stage="subtitles", level=conf.UNRELIABLE, detail=detail,
+                remedy=remedy,
+            )
+
+        weak = (
+            not self.punctuated
+            or self.rolling
+            or self.duplicated > self.events * 0.20
+        )
+        if weak:
+            if self.rolling:
+                detail = (
+                    f"{self.kind}, {self.removed_words} of {self.words} words "
+                    f"were repeats"
+                )
+            elif not self.punctuated:
+                detail = f"{self.kind}, no sentence punctuation"
+            else:
+                detail = f"{self.kind}, {self.duplicated} repeated lines removed"
+            return conf.Check(
+                stage="subtitles", level=conf.WEAK, detail=detail, remedy=remedy,
+            )
+
+        return conf.Check(
+            stage="subtitles", level=conf.OK,
+            detail=f"{self.kind}, {self.events} lines", remedy=remedy,
+        )
 
 
 def read(path: str | Path) -> list[Event]:
@@ -208,6 +266,7 @@ def normalize(events: list[Event]) -> tuple[list[Event], TrackInfo]:
 
     working = _untangle(working)
     info.events = len(working)
+    info.words = sum(len(e.text.split()) for e in working)
     return working, info
 
 
